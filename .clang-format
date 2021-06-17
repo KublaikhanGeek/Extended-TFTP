@@ -1,0 +1,24 @@
+BasedOnStyle: WebKit
+IndentWidth: 4
+ColumnLimit: 120
+ 
+AllowShortFunctionsOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: Never
+BreakBeforeBraces: Allman
+AlwaysBreakTemplateDeclarations: Yes
+CompactNamespaces: true
+NamespaceIndentation: None
+ 
+AlignAfterOpenBracket: Align
+AlignTrailingComments: true
+AlignConsecutiveAssignments: true
+AlignConsecutiveDeclarations: false
+AlignConsecutiveMacros: true
+AlignEscapedNewlines: Left
+ 
+ReflowComments: true
+SpacesBeforeTrailingComments: 1
+IndentCaseLabels: false
+UseTab: Never
+SortIncludes: false
+SpaceBeforeCpp11BracedList: true
