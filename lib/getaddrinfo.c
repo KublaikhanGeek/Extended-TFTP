@@ -10,7 +10,7 @@
 extern int errno;
 extern int h_errno;
 
-void freeaddrinfo(struct addrinfo *res)
+void freeaddrinfo(struct addrinfo* res)
 {
     if (!res)
         return;
@@ -23,81 +23,87 @@ void freeaddrinfo(struct addrinfo *res)
     free(res);
 }
 
-int getaddrinfo(const char *node, const char *service, const struct addrinfo *hints,
-                struct addrinfo **res)
+int getaddrinfo(const char* node, const char* service, const struct addrinfo* hints, struct addrinfo** res)
 {
-    struct hostent  *host;
-    struct sockaddr *sa;
+    struct hostent* host;
+    struct sockaddr* sa;
     int err, size = 0;
 
-    if ((!node) || (!res)) {
+    if ((!node) || (!res))
+    {
         errno = EINVAL;
         return EAI_SYSTEM;
     }
     *res = NULL;
     /* we do not support service in this version */
-    if (service) {
+    if (service)
+    {
         errno = EINVAL;
         return EAI_SYSTEM;
     }
     host = gethostbyname(node);
     if (!host)
         return EAI_NONAME;
-    if (hints) {
-        if (hints->ai_family != AF_UNSPEC) {
+    if (hints)
+    {
+        if (hints->ai_family != AF_UNSPEC)
+        {
             if (hints->ai_family != host->h_addrtype)
                 return EAI_ADDRFAMILY;
         }
     }
-    *res =  malloc(sizeof(struct addrinfo));
-    if (!*res) {
+    *res = malloc(sizeof(struct addrinfo));
+    if (!*res)
+    {
         return EAI_MEMORY;
     }
     memset(*res, 0, sizeof(struct addrinfo));
     (*res)->ai_family = host->h_addrtype;
-    if (host->h_length) {
+    if (host->h_length)
+    {
         if (host->h_addrtype == AF_INET)
             size = sizeof(struct sockaddr_in);
 #ifdef HAVE_IPV6
         else if (host->h_addrtype == AF_INET6)
             size = sizeof(struct sockaddr_in6);
 #endif
-        else {
+        else
+        {
             free(*res);
             *res = NULL;
             return EAI_ADDRFAMILY;
         }
         sa = malloc(size);
-        if (!sa) {
+        if (!sa)
+        {
             free(*res);
             *res = NULL;
             return EAI_MEMORY;
         }
         memset(sa, 0, size);
-        (*res)->ai_addr = sa;
+        (*res)->ai_addr    = sa;
         (*res)->ai_addrlen = size;
-        sa->sa_family = host->h_addrtype;
+        sa->sa_family      = host->h_addrtype;
         if (host->h_addrtype == AF_INET)
-            memcpy(&((struct sockaddr_in *)sa)->sin_addr, host->h_addr, host->h_length);
+            memcpy(&((struct sockaddr_in*)sa)->sin_addr, host->h_addr, host->h_length);
 #ifdef HAVE_IPV6
         else
-            memcpy(&((struct sockaddr_in6 *)sa)->sin6_addr, host->h_addr, host->h_length);
+            memcpy(&((struct sockaddr_in6*)sa)->sin6_addr, host->h_addr, host->h_length);
 #endif
     }
     if (host->h_name)
-       (*res)->ai_canonname = strdup(host->h_name);
+        (*res)->ai_canonname = strdup(host->h_name);
 
     /* we only handle the first address entry and do not build a list now */
     return 0;
 }
 
-
-
-const char *gai_strerror(int errcode)
+const char* gai_strerror(int errcode)
 {
-    const char *s = NULL;
+    const char* s = NULL;
 
-    switch(errcode) {
+    switch (errcode)
+    {
     case 0:
         s = "no error";
         break;

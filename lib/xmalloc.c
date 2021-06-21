@@ -7,11 +7,12 @@
 
 #include "config.h"
 
-void *xmalloc(size_t size)
+void* xmalloc(size_t size)
 {
-    void *p = malloc(size);
+    void* p = malloc(size);
 
-    if (!p) {
+    if (!p)
+    {
         fprintf(stderr, "Out of memory!\n");
         exit(128);
     }

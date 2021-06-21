@@ -40,82 +40,77 @@
 
 #include "config.h"
 
-union sock_addr {
-    struct sockaddr     sa;
-    struct sockaddr_in  si;
+union sock_addr
+{
+    struct sockaddr sa;
+    struct sockaddr_in si;
 #ifdef HAVE_IPV6
     struct sockaddr_in6 s6;
 #endif
 };
 
 #define SOCKLEN(sock) \
-    (((union sock_addr*)sock)->sa.sa_family == AF_INET ? \
-    (sizeof(struct sockaddr_in)) : \
-    (sizeof(union sock_addr)))
+    (((union sock_addr*)sock)->sa.sa_family == AF_INET ? (sizeof(struct sockaddr_in)) : (sizeof(union sock_addr)))
 
 #ifdef HAVE_IPV6
-#define SOCKPORT(sock) \
-    (((union sock_addr*)sock)->sa.sa_family == AF_INET ? \
-    ((union sock_addr*)sock)->si.sin_port : \
-    ((union sock_addr*)sock)->s6.sin6_port)
+#define SOCKPORT(sock)                                                                         \
+    (((union sock_addr*)sock)->sa.sa_family == AF_INET ? ((union sock_addr*)sock)->si.sin_port \
+                                                       : ((union sock_addr*)sock)->s6.sin6_port)
 #else
-#define SOCKPORT(sock) \
-    (((union sock_addr*)sock)->si.sin_port)
+#define SOCKPORT(sock) (((union sock_addr*)sock)->si.sin_port)
 #endif
 
 #ifdef HAVE_IPV6
-#define SOCKADDR_P(sock) \
-    (((union sock_addr*)sock)->sa.sa_family == AF_INET ? \
-    (void *)&((union sock_addr*)sock)->si.sin_addr : \
-    (void *)&((union sock_addr*)sock)->s6.sin6_addr)
+#define SOCKADDR_P(sock)                                                                               \
+    (((union sock_addr*)sock)->sa.sa_family == AF_INET ? (void*)&((union sock_addr*)sock)->si.sin_addr \
+                                                       : (void*)&((union sock_addr*)sock)->s6.sin6_addr)
 #else
-#define SOCKADDR_P(sock) \
-    (void *)&((union sock_addr*)sock)->si.sin_addr
+#define SOCKADDR_P(sock) (void*)&((union sock_addr*)sock)->si.sin_addr
 #endif
 
 #ifdef HAVE_IPV6
-int is_numeric_ipv6(const char *);
-char *strip_address(char *);
+int is_numeric_ipv6(const char*);
+char* strip_address(char*);
 #else
-#define is_numeric_ipv6(a)      0
-#define strip_address(a)	(a)
+#define is_numeric_ipv6(a) 0
+#define strip_address(a)   (a)
 #endif
 
-static inline int sa_set_port(union sock_addr *s, u_short port)
+static inline int sa_set_port(union sock_addr* s, u_short port)
 {
-       switch (s->sa.sa_family) {
-       case AF_INET:
-               s->si.sin_port = port;
-               break;
+    switch (s->sa.sa_family)
+    {
+    case AF_INET:
+        s->si.sin_port = port;
+        break;
 #ifdef HAVE_IPV6
-       case AF_INET6:
-               s->s6.sin6_port = port;
-               break;
+    case AF_INET6:
+        s->s6.sin6_port = port;
+        break;
 #endif
-       default:
-               return -1;
-       }
-       return 0;
+    default:
+        return -1;
+    }
+    return 0;
 }
 
-int set_sock_addr(char *, union sock_addr *, char **);
+int set_sock_addr(char*, union sock_addr*, char**);
 
 struct tftphdr;
 
-struct tftphdr *r_init(void);
-void read_ahead(FILE *, int);
-int readit(FILE *, struct tftphdr **, int);
+struct tftphdr* r_init(void);
+void read_ahead(FILE*, int);
+int readit(FILE*, struct tftphdr**, int);
 
 int synchnet(int);
 
-struct tftphdr *w_init(void);
-int write_behind(FILE *, int);
-int writeit(FILE *, struct tftphdr **, int, int);
+struct tftphdr* w_init(void);
+int write_behind(FILE*, int);
+int writeit(FILE*, struct tftphdr**, int, int);
 
 extern int segsize;
-#define MAX_SEGSIZE	65464
+#define MAX_SEGSIZE 65464
 
-int pick_port_bind(int sockfd, union sock_addr *myaddr,
-                   unsigned int from, unsigned int to);
+int pick_port_bind(int sockfd, union sock_addr* myaddr, unsigned int from, unsigned int to);
 
 #endif

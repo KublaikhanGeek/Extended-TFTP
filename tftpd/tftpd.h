@@ -18,8 +18,8 @@
 #define TFTPD_TFTPD_H
 
 void set_signal(int, void (*)(int), int);
-void *tfmalloc(size_t);
-char *tfstrdup(const char *);
+void* tfmalloc(size_t);
+char* tfstrdup(const char*);
 
 extern int verbosity;
 

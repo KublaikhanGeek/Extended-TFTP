@@ -14,7 +14,8 @@ int dup2(int oldfd, int newfd)
 
     nfd = rv = dup(oldfd);
 
-    if (rv >= 0 && rv != newfd) {
+    if (rv >= 0 && rv != newfd)
+    {
         rv = dup2(oldfd, newfd);
         close(nfd);
     }

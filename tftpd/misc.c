@@ -14,7 +14,7 @@
  * Minor help routines.
  */
 
-#include "config.h"             /* Must be included first! */
+#include "config.h" /* Must be included first! */
 #include <syslog.h>
 #include "tftpd.h"
 
@@ -22,7 +22,7 @@
  * Set the signal handler and flags.  Basically a user-friendly
  * wrapper around sigaction().
  */
-void set_signal(int signum, void (*handler) (int), int flags)
+void set_signal(int signum, void (*handler)(int), int flags)
 {
     struct sigaction sa;
 
@@ -31,7 +31,8 @@ void set_signal(int signum, void (*handler) (int), int flags)
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = flags;
 
-    if (sigaction(signum, &sa, NULL)) {
+    if (sigaction(signum, &sa, NULL))
+    {
         syslog(LOG_ERR, "sigaction: %m");
         exit(EX_OSERR);
     }
@@ -40,11 +41,12 @@ void set_signal(int signum, void (*handler) (int), int flags)
 /*
  * malloc() that syslogs an error message and bails if it fails.
  */
-void *tfmalloc(size_t size)
+void* tfmalloc(size_t size)
 {
-    void *p = malloc(size);
+    void* p = malloc(size);
 
-    if (!p) {
+    if (!p)
+    {
         syslog(LOG_ERR, "malloc: %m");
         exit(EX_OSERR);
     }
@@ -55,11 +57,12 @@ void *tfmalloc(size_t size)
 /*
  * strdup() that does the equivalent
  */
-char *tfstrdup(const char *str)
+char* tfstrdup(const char* str)
 {
-    char *p = strdup(str);
+    char* p = strdup(str);
 
-    if (!p) {
+    if (!p)
+    {
         syslog(LOG_ERR, "strdup: %m");
         exit(EX_OSERR);
     }

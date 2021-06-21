@@ -17,6 +17,4 @@
 
 #include "config.h"
 
-int
-myrecvfrom(int s, void *buf, int len, unsigned int flags,
-           union sock_addr *from, union sock_addr *myaddr);
+int myrecvfrom(int s, void* buf, int len, unsigned int flags, union sock_addr* from, union sock_addr* myaddr);
