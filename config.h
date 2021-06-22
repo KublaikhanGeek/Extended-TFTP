@@ -235,21 +235,22 @@ typedef int socklen_t;
 #ifdef HAVE_SYSEXITS_H
 #include <sysexits.h>
 #else
-#define EX_USAGE       64 /* command line usage error */
-#define EX_DATAERR     65 /* data format error */
-#define EX_NOINPUT     66 /* cannot open input */
-#define EX_NOUSER      67 /* addressee unknown */
-#define EX_NOHOST      68 /* host name unknown */
-#define EX_UNAVAILABLE 69 /* service unavailable */
-#define EX_SOFTWARE    70 /* internal software error */
-#define EX_OSERR       71 /* system error (e.g., can't fork) */
-#define EX_OSFILE      72 /* critical OS file missing */
-#define EX_CANTCREAT   73 /* can't create (user) output file */
-#define EX_IOERR       74 /* input/output error */
-#define EX_TEMPFAIL    75 /* temp failure; user is invited to retry */
-#define EX_PROTOCOL    76 /* remote error in protocol */
-#define EX_NOPERM      77 /* permission denied */
-#define EX_CONFIG      78 /* configuration error */
+#define EX_USAGE       64  /* command line usage error */
+#define EX_DATAERR     65  /* data format error */
+#define EX_NOINPUT     66  /* cannot open input */
+#define EX_NOUSER      67  /* addressee unknown */
+#define EX_NOHOST      68  /* host name unknown */
+#define EX_UNAVAILABLE 69  /* service unavailable */
+#define EX_SOFTWARE    70  /* internal software error */
+#define EX_OSERR       71  /* system error (e.g., can't fork) */
+#define EX_OSFILE      72  /* critical OS file missing */
+#define EX_CANTCREAT   73  /* can't create (user) output file */
+#define EX_IOERR       74  /* input/output error */
+#define EX_TEMPFAIL    75  /* temp failure; user is invited to retry */
+#define EX_PROTOCOL    76  /* remote error in protocol */
+#define EX_NOPERM      77  /* permission denied */
+#define EX_CONFIG      78  /* configuration error */
+#define EX_OK          200 /* OK */
 #endif
 
 /* If we don't have sigsetjmp() et all, setjmp() will have to do */
@@ -294,6 +295,19 @@ typedef int socklen_t;
 #ifndef EOPTNEG
 #define EOPTNEG 8
 #endif
+
+#define DELE   7
+#define CWD    8
+#define LIST   9
+#define NOOP   10
+#define MKD    11
+#define RMD    12
+#define PWD    13
+#define CDUP   14
+#define SIZE   15
+#define CHMOD  16
+#define MD5    17
+#define RETURN 18
 
 /* Prototypes for libxtra functions */
 

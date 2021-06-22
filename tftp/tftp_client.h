@@ -31,10 +31,38 @@
  * SUCH DAMAGE.
  */
 
-#ifndef RECVFILE_H
-#define RECVFILE_H
+#ifndef TFTP_CLIENT_H
+#define TFTP_CLIENT_H
 
-void tftp_recvfile(int, const char*, const char*);
-void tftp_sendfile(int, const char*, const char*);
+void tftp_get(int, const char*, const char*);
+void tftp_put(int, const char*, const char*);
+
+// obj
+void* tftp_create(const char* serverip, int port, const char* localip, int localport);
+void tftp_destroy(void* obj);
+
+// setting
+int tftp_set_mode(void* obj, const char* mode); // set file transfer mode: "netascii", "octet"
+int tftp_set_verbose(void* obj, int onoff);     // toggle verbose mode
+int tftp_set_trace(void* obj, int onoff);       // toggle packet tracing
+int tftp_set_rexmt(void* obj, int rexmt);       // set per-packet transmission timeout
+int tftp_set_timeout(void* obj, int timeout);   // set total retransmission timeout
+
+// cmd
+int tftp_cmd_get(void* obj, const char* local, const char* remote); // send file
+int tftp_cmd_put(void* obj, const char* local, const char* remote); // receive file
+int tftp_cmd_cd(void* obj, const char* path);
+int tftp_cmd_cdup(void* obj);
+int tftp_cmd_lcd(void* obj, const char* path);
+int tftp_cmd_pwd(void* obj, char* pwd);
+int tftp_cmd_delete(void* obj, const char* path);
+int tftp_cmd_rename(void* obj, const char* src, const char* dst);
+int tftp_cmd_ls(void* obj, const char* path, char* buf);
+int tftp_cmd_dir(void* obj, const char* path, char* buf);
+int tftp_cmd_mkdir(void* obj, const char* path);
+int tftp_cmd_rmdir(void* obj, const char* path);
+int tftp_cmd_size(void* obj, const char* path, int* size);
+int tftp_cmd_chmod(void* obj, const char* path, const char* mode);
+int tftp_cmd_md5(void* obj, const char* path, char* md5);
 
 #endif

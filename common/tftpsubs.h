@@ -112,5 +112,4 @@ extern int segsize;
 #define MAX_SEGSIZE 65464
 
 int pick_port_bind(int sockfd, union sock_addr* myaddr, unsigned int from, unsigned int to);
-
 #endif

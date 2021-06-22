@@ -1,0 +1,6 @@
+{
+	"files.associations": {
+		"tftpsubs.h": "c",
+		"recvfrom.h": "c"
+	}
+}

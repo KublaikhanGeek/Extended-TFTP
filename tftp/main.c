@@ -47,7 +47,7 @@
 #endif
 #endif
 
-#include "extern.h"
+#include "tftp_client.h"
 
 #define TIMEOUT 5   /* secs between rexmt's */
 #define LBUFLEN 200 /* size of input buffer */
@@ -112,9 +112,24 @@ void settrace(int, char**);
 void setverbose(int, char**);
 void status(int, char**);
 void setliteral(int, char**);
+void do_cd(int, char**);
+void do_cdup(int, char**);
+void do_lcd(int, char**);
+void do_pwd(int, char**);
+void do_delete(int, char**);
+void do_mdelete(int, char**);
+void do_rename(int, char**);
+void do_ls(int, char**);
+void do_dir(int, char**);
+void do_mkdir(int, char**);
+void do_rmdir(int, char**);
+void do_mget(int, char**);
+void do_mput(int, char**);
+void do_size(int, char**);
+void do_chmod(int, char**);
+void do_md5(int, char**);
 
 static void command(void);
-
 static void getusage(char*);
 static void makeargv(void);
 static void putusage(char*);
@@ -144,6 +159,28 @@ struct cmd cmdtab[] = { { "connect", "connect to remote tftp", setpeer },
                         { "timeout", "set total retransmission timeout", settimeout },
                         { "?", "print help information", help },
                         { "help", "print help information", help },
+                        { "cd", "change working directory", do_cd },
+                        { "cdup", "change to parent directory", do_cdup },
+                        { "lcd", "change working directory on the local machine", do_lcd },
+                        { "pwd", "print working directory", do_pwd },
+                        { "delete", "delete file", do_delete },
+                        { "mdelete", "delete files", do_mdelete },
+                        { "rename", "rename the file from on the remote machine", do_rename },
+                        { "ls",
+                          "returns information of a file or directory if specified, else information of the current "
+                          "working directory is returned.",
+                          do_ls },
+                        { "dir",
+                          "returns information of a file or directory if specified, else information of the current "
+                          "working directory is returned.",
+                          do_dir },
+                        { "mkdir", "make directory", do_mkdir },
+                        { "rmdir", "remove a directory", do_rmdir },
+                        { "mget", "receive files", do_mget },
+                        { "mput", "send files", do_mput },
+                        { "size", "return the size of a file", do_size },
+                        { "chmod", "changes the permissions of each given file according to mode", do_chmod },
+                        { "md5", "return the md5 value of a file", do_md5 },
                         { 0, 0, 0 } };
 
 struct cmd* getcmd(char*);
@@ -584,7 +621,7 @@ void put(int argc, char* argv[])
         if (verbose)
             printf("putting %s to %s:%s [%s]\n", cp, hostname, targ, mode->m_mode);
         sa_set_port(&peeraddr, port);
-        tftp_sendfile(fd, targ, mode->m_mode);
+        tftp_put(fd, targ, mode->m_mode);
         return;
     }
     /* this assumes the target is a directory */
@@ -604,7 +641,7 @@ void put(int argc, char* argv[])
         if (verbose)
             printf("putting %s to %s:%s [%s]\n", argv[n], hostname, targ, mode->m_mode);
         sa_set_port(&peeraddr, port);
-        tftp_sendfile(fd, targ, mode->m_mode);
+        tftp_put(fd, targ, mode->m_mode);
     }
 }
 
@@ -679,7 +716,7 @@ void get(int argc, char* argv[])
             if (verbose)
                 printf("getting from %s:%s to %s [%s]\n", hostname, src, cp, mode->m_mode);
             sa_set_port(&peeraddr, port);
-            tftp_recvfile(fd, src, mode->m_mode);
+            tftp_get(fd, src, mode->m_mode);
             break;
         }
         cp = tail(src); /* new .. jdg */
@@ -693,7 +730,7 @@ void get(int argc, char* argv[])
         if (verbose)
             printf("getting from %s:%s to %s [%s]\n", hostname, src, cp, mode->m_mode);
         sa_set_port(&peeraddr, port);
-        tftp_recvfile(fd, src, mode->m_mode);
+        tftp_get(fd, src, mode->m_mode);
     }
 }
 
@@ -968,4 +1005,53 @@ void setverbose(int argc, char* argv[])
 
     verbose = !verbose;
     printf("Verbose mode %s.\n", verbose ? "on" : "off");
+}
+
+void do_cd(int argc, char* argv[])
+{
+}
+void do_cdup(int argc, char* argv[])
+{
+}
+void do_lcd(int argc, char* argv[])
+{
+}
+void do_pwd(int argc, char* argv[])
+{
+}
+void do_delete(int argc, char* argv[])
+{
+}
+void do_mdelete(int argc, char* argv[])
+{
+}
+void do_rename(int argc, char* argv[])
+{
+}
+void do_ls(int argc, char* argv[])
+{
+}
+void do_dir(int argc, char* argv[])
+{
+}
+void do_mkdir(int argc, char* argv[])
+{
+}
+void do_rmdir(int argc, char* argv[])
+{
+}
+void do_mget(int argc, char* argv[])
+{
+}
+void do_mput(int argc, char* argv[])
+{
+}
+void do_size(int argc, char* argv[])
+{
+}
+void do_chmod(int argc, char* argv[])
+{
+}
+void do_md5(int argc, char* argv[])
+{
 }
