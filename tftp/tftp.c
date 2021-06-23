@@ -89,268 +89,6 @@ static void tpacket(const char*, struct tftphdr*, int);
 static int send_cmd_reply(struct tftpObj* obj, char* send, int sendLen, char* reply, int replyLen);
 static int exe_cmd(void* obj, u_short opcode, const char* cmd, int cmdSize, char* msg, int msgSize);
 
-/*
- * Send the requested file.
- */
-int tftp_cmd_put(void* obj, const char* local, const char* remote)
-{
-    struct tftphdr* ap; /* data and ack packets */
-    struct tftphdr* dp;
-    int n;
-    volatile int is_request;
-    volatile u_short block;
-    volatile int size, convert;
-    volatile off_t amount;
-    union sock_addr from;
-    socklen_t fromlen;
-    FILE* file;
-    u_short ap_opcode, ap_block;
-    struct tftpObj* tftp;
-    int ret = 0;
-
-    startclock(); /* start stat's clock */
-    tftp       = (struct tftpObj*)obj;
-    dp         = r_init(); /* reset fillbuf/read-ahead code */
-    ap         = (struct tftphdr*)ackbuf;
-    convert    = !strcmp(tftp->mode->m_mode, "netascii");
-    block      = 0;
-    is_request = 1; /* First packet is the actual WRQ */
-    amount     = 0;
-    file       = fopen(local, convert ? "rt" : "rb");
-    if (!file)
-    {
-        printf("Failed to open file: %s \n", local);
-        return -1;
-    }
-
-    bsd_signal(SIGALRM, timer);
-    do
-    {
-        if (is_request)
-        {
-            size = makerequest(WRQ, remote, dp, tftp->mode->m_mode) - 4;
-        }
-        else
-        {
-            size = readit(file, &dp, convert);
-            if (size < 0)
-            {
-                nak(tftp, errno + 100, NULL);
-                break;
-            }
-            dp->th_opcode = htons((u_short)DATA);
-            dp->th_block  = htons((u_short)block);
-        }
-        timeout = 0;
-        (void)sigsetjmp(timeoutbuf, 1);
-
-        if (tftp->trace)
-            tpacket("sent", dp, size + 4);
-        n = sendto(tftp->socket, dp, size + 4, 0, &tftp->peeraddr.sa, SOCKLEN(&tftp->peeraddr));
-        if (n != size + 4)
-        {
-            perror("tftp: sendto");
-            ret = -1;
-            goto abort;
-        }
-        read_ahead(file, convert);
-        for (;;)
-        {
-            alarm(tftp->rexmt);
-            do
-            {
-                fromlen = sizeof(from);
-                n       = recvfrom(tftp->socket, ackbuf, sizeof(ackbuf), 0, &from.sa, &fromlen);
-            } while (n <= 0);
-            alarm(0);
-            if (n < 0)
-            {
-                perror("tftp: recvfrom");
-                ret = -1;
-                goto abort;
-            }
-            sa_set_port(&tftp->peeraddr, SOCKPORT(&from)); /* added */
-            if (tftp->trace)
-                tpacket("received", ap, n);
-            /* should verify packet came from server */
-            ap_opcode = ntohs((u_short)ap->th_opcode);
-            ap_block  = ntohs((u_short)ap->th_block);
-            if (ap_opcode == ERROR)
-            {
-                printf("Error code %d: %s\n", ap_block, ap->th_msg);
-                ret = -1;
-                goto abort;
-            }
-            if (ap_opcode == ACK)
-            {
-                int j;
-
-                if (ap_block == block)
-                {
-                    break;
-                }
-                /* On an error, try to synchronize
-                 * both sides.
-                 */
-                j = synchnet(tftp->socket);
-                if (j && tftp->trace)
-                {
-                    printf("discarded %d packets\n", j);
-                }
-                /*
-                 * RFC1129/RFC1350: We MUST NOT re-send the DATA
-                 * packet in response to an invalid ACK.  Doing so
-                 * would cause the Sorcerer's Apprentice bug.
-                 */
-            }
-        }
-        if (!is_request)
-            amount += size;
-        is_request = 0;
-        block++;
-    } while (size == SEGSIZE || block == 1);
-abort:
-    fclose(file);
-    stopclock();
-    if (amount > 0 && tftp->verbose)
-        printstats("Sent", amount);
-
-    return ret;
-}
-
-/*
- * Receive a file.
- */
-int tftp_cmd_get(void* obj, const char* local, const char* remote)
-{
-    struct tftphdr* ap;
-    struct tftphdr* dp;
-    int n;
-    volatile u_short block;
-    volatile int size, firsttrip;
-    volatile unsigned long amount;
-    union sock_addr from;
-    socklen_t fromlen;
-    FILE* file;
-    volatile int convert; /* true if converting crlf -> lf */
-    u_short dp_opcode, dp_block;
-    struct tftpObj* tftp;
-    int ret = 0;
-
-    startclock();
-    tftp      = (struct tftpObj*)obj;
-    dp        = w_init();
-    ap        = (struct tftphdr*)ackbuf;
-    convert   = !strcmp(tftp->mode->m_mode, "netascii");
-    block     = 1;
-    firsttrip = 1;
-    amount    = 0;
-    file      = fopen(local, convert ? "wt" : "wb");
-    if (!file)
-    {
-        printf("Failed to open file: %s\n", local);
-        return -1;
-    }
-
-    bsd_signal(SIGALRM, timer);
-    do
-    {
-        if (firsttrip)
-        {
-            size      = makerequest(RRQ, remote, ap, tftp->mode->m_mode);
-            firsttrip = 0;
-        }
-        else
-        {
-            ap->th_opcode = htons((u_short)ACK);
-            ap->th_block  = htons((u_short)block);
-            size          = 4;
-            block++;
-        }
-        timeout = 0;
-        (void)sigsetjmp(timeoutbuf, 1);
-    send_ack:
-        if (tftp->trace)
-            tpacket("sent", ap, size);
-        if (sendto(tftp->socket, ackbuf, size, 0, &tftp->peeraddr.sa, SOCKLEN(&tftp->peeraddr)) != size)
-        {
-            alarm(0);
-            perror("tftp: sendto");
-            ret = -1;
-            goto abort;
-        }
-        write_behind(file, convert);
-        for (;;)
-        {
-            alarm(tftp->rexmt);
-            do
-            {
-                fromlen = sizeof(from);
-                n       = recvfrom(tftp->socket, dp, PKTSIZE, 0, &from.sa, &fromlen);
-            } while (n <= 0);
-            alarm(0);
-            if (n < 0)
-            {
-                perror("tftp: recvfrom");
-                ret = -1;
-                goto abort;
-            }
-            sa_set_port(&tftp->peeraddr, SOCKPORT(&from)); /* added */
-            if (tftp->trace)
-                tpacket("received", dp, n);
-            /* should verify client address */
-            dp_opcode = ntohs((u_short)dp->th_opcode);
-            dp_block  = ntohs((u_short)dp->th_block);
-            if (dp_opcode == ERROR)
-            {
-                printf("Error code %d: %s\n", dp_block, dp->th_msg);
-                ret = -1;
-                goto abort;
-            }
-            if (dp_opcode == DATA)
-            {
-                int j;
-
-                if (dp_block == block)
-                {
-                    break; /* have next packet */
-                }
-                /* On an error, try to synchronize
-                 * both sides.
-                 */
-                j = synchnet(tftp->socket);
-                if (j && tftp->trace)
-                {
-                    printf("discarded %d packets\n", j);
-                }
-                if (dp_block == (block - 1))
-                {
-                    goto send_ack; /* resend ack */
-                }
-            }
-        }
-        /*      size = write(fd, dp->th_data, n - 4); */
-        size = writeit(file, &dp, n - 4, convert);
-        if (size < 0)
-        {
-            nak(tftp, errno + 100, NULL);
-            break;
-        }
-        amount += size;
-    } while (size == SEGSIZE);
-abort:                                   /* ok to ack, since user */
-    ap->th_opcode = htons((u_short)ACK); /* has seen err msg */
-    ap->th_block  = htons((u_short)block);
-    (void)sendto(tftp->socket, ackbuf, 4, 0, (struct sockaddr*)&tftp->peeraddr, SOCKLEN(&tftp->peeraddr));
-    write_behind(file, convert); /* flush last buffer */
-    fclose(file);
-    stopclock();
-    if (amount > 0 && tftp->verbose)
-        printstats("Received", amount);
-
-    return ret;
-}
-
 static int makerequest(int request, const char* name, struct tftphdr* tp, const char* mode)
 {
     char* cp;
@@ -809,11 +547,260 @@ int exe_cmd(void* obj, u_short opcode, const char* cmd, int cmdSize, char* msg, 
 }
 
 // cmd
-int tftp_cmd_get(void* obj, const char* local, const char* remote)
-{
-}
 int tftp_cmd_put(void* obj, const char* local, const char* remote)
 {
+    struct tftphdr* ap; /* data and ack packets */
+    struct tftphdr* dp;
+    int n;
+    volatile int is_request;
+    volatile u_short block;
+    volatile int size, convert;
+    volatile off_t amount;
+    union sock_addr from;
+    socklen_t fromlen;
+    FILE* file;
+    u_short ap_opcode, ap_block;
+    struct tftpObj* tftp;
+    int ret = 0;
+
+    startclock(); /* start stat's clock */
+    tftp       = (struct tftpObj*)obj;
+    dp         = r_init(); /* reset fillbuf/read-ahead code */
+    ap         = (struct tftphdr*)ackbuf;
+    convert    = !strcmp(tftp->mode->m_mode, "netascii");
+    block      = 0;
+    is_request = 1; /* First packet is the actual WRQ */
+    amount     = 0;
+    file       = fopen(local, convert ? "rt" : "rb");
+    if (!file)
+    {
+        printf("Failed to open file: %s \n", local);
+        return -1;
+    }
+
+    bsd_signal(SIGALRM, timer);
+    do
+    {
+        if (is_request)
+        {
+            size = makerequest(WRQ, remote, dp, tftp->mode->m_mode) - 4;
+        }
+        else
+        {
+            size = readit(file, &dp, convert);
+            if (size < 0)
+            {
+                nak(tftp, errno + 100, NULL);
+                break;
+            }
+            dp->th_opcode = htons((u_short)DATA);
+            dp->th_block  = htons((u_short)block);
+        }
+        timeout = 0;
+        (void)sigsetjmp(timeoutbuf, 1);
+
+        if (tftp->trace)
+            tpacket("sent", dp, size + 4);
+        n = sendto(tftp->socket, dp, size + 4, 0, &tftp->peeraddr.sa, SOCKLEN(&tftp->peeraddr));
+        if (n != size + 4)
+        {
+            perror("tftp: sendto");
+            ret = -1;
+            goto abort;
+        }
+        read_ahead(file, convert);
+        for (;;)
+        {
+            alarm(tftp->rexmt);
+            do
+            {
+                fromlen = sizeof(from);
+                n       = recvfrom(tftp->socket, ackbuf, sizeof(ackbuf), 0, &from.sa, &fromlen);
+            } while (n <= 0);
+            alarm(0);
+            if (n < 0)
+            {
+                perror("tftp: recvfrom");
+                ret = -1;
+                goto abort;
+            }
+            sa_set_port(&tftp->peeraddr, SOCKPORT(&from)); /* added */
+            if (tftp->trace)
+                tpacket("received", ap, n);
+            /* should verify packet came from server */
+            ap_opcode = ntohs((u_short)ap->th_opcode);
+            ap_block  = ntohs((u_short)ap->th_block);
+            if (ap_opcode == ERROR)
+            {
+                printf("Error code %d: %s\n", ap_block, ap->th_msg);
+                ret = -1;
+                goto abort;
+            }
+            if (ap_opcode == ACK)
+            {
+                int j;
+
+                if (ap_block == block)
+                {
+                    break;
+                }
+                /* On an error, try to synchronize
+                 * both sides.
+                 */
+                j = synchnet(tftp->socket);
+                if (j && tftp->trace)
+                {
+                    printf("discarded %d packets\n", j);
+                }
+                /*
+                 * RFC1129/RFC1350: We MUST NOT re-send the DATA
+                 * packet in response to an invalid ACK.  Doing so
+                 * would cause the Sorcerer's Apprentice bug.
+                 */
+            }
+        }
+        if (!is_request)
+            amount += size;
+        is_request = 0;
+        block++;
+    } while (size == SEGSIZE || block == 1);
+abort:
+    fclose(file);
+    stopclock();
+    if (amount > 0 && tftp->verbose)
+        printstats("Sent", amount);
+
+    return ret;
+}
+
+int tftp_cmd_get(void* obj, const char* local, const char* remote)
+{
+    struct tftphdr* ap;
+    struct tftphdr* dp;
+    int n;
+    volatile u_short block;
+    volatile int size, firsttrip;
+    volatile unsigned long amount;
+    union sock_addr from;
+    socklen_t fromlen;
+    FILE* file;
+    volatile int convert; /* true if converting crlf -> lf */
+    u_short dp_opcode, dp_block;
+    struct tftpObj* tftp;
+    int ret = 0;
+
+    startclock();
+    tftp      = (struct tftpObj*)obj;
+    dp        = w_init();
+    ap        = (struct tftphdr*)ackbuf;
+    convert   = !strcmp(tftp->mode->m_mode, "netascii");
+    block     = 1;
+    firsttrip = 1;
+    amount    = 0;
+    file      = fopen(local, convert ? "wt" : "wb");
+    if (!file)
+    {
+        printf("Failed to open file: %s\n", local);
+        return -1;
+    }
+
+    bsd_signal(SIGALRM, timer);
+    do
+    {
+        if (firsttrip)
+        {
+            size      = makerequest(RRQ, remote, ap, tftp->mode->m_mode);
+            firsttrip = 0;
+        }
+        else
+        {
+            ap->th_opcode = htons((u_short)ACK);
+            ap->th_block  = htons((u_short)block);
+            size          = 4;
+            block++;
+        }
+        timeout = 0;
+        (void)sigsetjmp(timeoutbuf, 1);
+    send_ack:
+        if (tftp->trace)
+            tpacket("sent", ap, size);
+        if (sendto(tftp->socket, ackbuf, size, 0, &tftp->peeraddr.sa, SOCKLEN(&tftp->peeraddr)) != size)
+        {
+            alarm(0);
+            perror("tftp: sendto");
+            ret = -1;
+            goto abort;
+        }
+        write_behind(file, convert);
+        for (;;)
+        {
+            alarm(tftp->rexmt);
+            do
+            {
+                fromlen = sizeof(from);
+                n       = recvfrom(tftp->socket, dp, PKTSIZE, 0, &from.sa, &fromlen);
+            } while (n <= 0);
+            alarm(0);
+            if (n < 0)
+            {
+                perror("tftp: recvfrom");
+                ret = -1;
+                goto abort;
+            }
+            sa_set_port(&tftp->peeraddr, SOCKPORT(&from)); /* added */
+            if (tftp->trace)
+                tpacket("received", dp, n);
+            /* should verify client address */
+            dp_opcode = ntohs((u_short)dp->th_opcode);
+            dp_block  = ntohs((u_short)dp->th_block);
+            if (dp_opcode == ERROR)
+            {
+                printf("Error code %d: %s\n", dp_block, dp->th_msg);
+                ret = -1;
+                goto abort;
+            }
+            if (dp_opcode == DATA)
+            {
+                int j;
+
+                if (dp_block == block)
+                {
+                    break; /* have next packet */
+                }
+                /* On an error, try to synchronize
+                 * both sides.
+                 */
+                j = synchnet(tftp->socket);
+                if (j && tftp->trace)
+                {
+                    printf("discarded %d packets\n", j);
+                }
+                if (dp_block == (block - 1))
+                {
+                    goto send_ack; /* resend ack */
+                }
+            }
+        }
+        /*      size = write(fd, dp->th_data, n - 4); */
+        size = writeit(file, &dp, n - 4, convert);
+        if (size < 0)
+        {
+            nak(tftp, errno + 100, NULL);
+            break;
+        }
+        amount += size;
+    } while (size == SEGSIZE);
+abort:                                   /* ok to ack, since user */
+    ap->th_opcode = htons((u_short)ACK); /* has seen err msg */
+    ap->th_block  = htons((u_short)block);
+    (void)sendto(tftp->socket, ackbuf, 4, 0, (struct sockaddr*)&tftp->peeraddr, SOCKLEN(&tftp->peeraddr));
+    write_behind(file, convert); /* flush last buffer */
+    fclose(file);
+    stopclock();
+    if (amount > 0 && tftp->verbose)
+        printstats("Received", amount);
+
+    return ret;
 }
 
 int tftp_cmd_cd(void* obj, const char* path)
