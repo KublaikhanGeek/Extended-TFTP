@@ -4,7 +4,7 @@ VERSION = $(shell cat ../version)
 -include ../MCONFIG
 include ../MRULES
 
-OBJS = tftp.$(O) main.$(O)
+OBJS = tftp_client.$(O) main.$(O)
 
 all: tftp$(X) tftp.1
 
