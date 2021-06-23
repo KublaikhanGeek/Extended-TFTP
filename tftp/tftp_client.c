@@ -860,14 +860,149 @@ int tftp_cmd_delete(void* obj, const char* path)
 
 int tftp_cmd_rename(void* obj, const char* src, const char* dst)
 {
+    char* cp;
+    char cmd[PKTSIZE];
+    char msg[PKTSIZE];
+    int msgSize = 0;
+    memset(cmd, 0, PKTSIZE);
+
+    cp = cmd;
+    strcpy(cp, src);
+    cp += strlen(src);
+    *cp++ = '\0';
+    strcpy(cp, dst);
+    cp += strlen(dst);
+    *cp++ = '\0';
+    return exe_cmd(obj, CHMOD, cmd, cp - cmd, msg, msgSize);
 }
 
 int tftp_cmd_ls(void* obj, const char* path, char* buf)
 {
+    struct tftphdr* ap;
+    struct tftphdr* dp;
+    int n;
+    volatile u_short block;
+    volatile int size, firsttrip;
+    volatile unsigned long amount;
+    union sock_addr from;
+    socklen_t fromlen;
+    u_short dp_opcode, dp_block;
+    struct tftpObj* tftp;
+    int ret = 0;
+    union sock_addr peeraddr;
+    char* stuff;
+    char* rwBuf;
+
+    startclock();
+    tftp      = (struct tftpObj*)obj;
+    ap        = (struct tftphdr*)ackbuf;
+    dp        = (struct tftphdr*)cmdbuf;
+    stuff     = (char*)&(ap->th_stuff);
+    block     = 1;
+    firsttrip = 1;
+    amount    = 0;
+    rwBuf     = buf;
+
+    CHECK_CONNECTED(tftp->connected);
+    memcpy(&peeraddr, &tftp->peeraddr, sizeof(union sock_addr));
+
+    bsd_signal(SIGALRM, timer);
+    do
+    {
+        if (firsttrip)
+        {
+            ap->th_opcode = htons(LIST);
+            strcpy(stuff, path);
+            size      = sizeof(ap->th_opcode) + strlen(path) + 1;
+            firsttrip = 0;
+        }
+        else
+        {
+            ap->th_opcode = htons((u_short)ACK);
+            ap->th_block  = htons((u_short)block);
+            size          = 4;
+            block++;
+        }
+        timeout = 0;
+        (void)sigsetjmp(timeoutbuf, 1);
+    send_ack:
+        if (tftp->trace)
+            tpacket("sent", ap, size);
+        if (sendto(tftp->socket, ackbuf, size, 0, &peeraddr.sa, SOCKLEN(&peeraddr)) != size)
+        {
+            alarm(0);
+            perror("tftp: sendto");
+            ret = -1;
+            goto abort;
+        }
+        for (;;)
+        {
+            alarm(tftp->rexmt);
+            do
+            {
+                fromlen = sizeof(from);
+                n       = recvfrom(tftp->socket, dp, PKTSIZE, 0, &from.sa, &fromlen);
+            } while (n <= 0);
+            alarm(0);
+            if (n < 0)
+            {
+                perror("tftp: recvfrom");
+                ret = -1;
+                goto abort;
+            }
+            sa_set_port(&peeraddr, SOCKPORT(&from)); /* added */
+            if (tftp->trace)
+                tpacket("received", dp, n);
+            /* should verify client address */
+            dp_opcode = ntohs((u_short)dp->th_opcode);
+            dp_block  = ntohs((u_short)dp->th_block);
+            if (dp_opcode == ERROR)
+            {
+                printf("Error code %d: %s\n", dp_block, dp->th_msg);
+                ret = -1;
+                goto abort;
+            }
+            if (dp_opcode == DATA)
+            {
+                int j;
+
+                if (dp_block == block)
+                {
+                    break; /* have next packet */
+                }
+                /* On an error, try to synchronize
+                 * both sides.
+                 */
+                j = synchnet(tftp->socket);
+                if (j && tftp->trace)
+                {
+                    printf("discarded %d packets\n", j);
+                }
+                if (dp_block == (block - 1))
+                {
+                    goto send_ack; /* resend ack */
+                }
+            }
+        }
+
+        memcpy(rwBuf, dp->th_data, n - 4);
+        rwBuf += (n - 4);
+        amount += size;
+    } while (size == SEGSIZE);
+abort:                                   /* ok to ack, since user */
+    ap->th_opcode = htons((u_short)ACK); /* has seen err msg */
+    ap->th_block  = htons((u_short)block);
+    (void)sendto(tftp->socket, ackbuf, 4, 0, (struct sockaddr*)&tftp->peeraddr, SOCKLEN(&tftp->peeraddr));
+    stopclock();
+    if (amount > 0 && tftp->verbose)
+        printstats("Received", amount);
+
+    return ret;
 }
 
 int tftp_cmd_dir(void* obj, const char* path, char* buf)
 {
+    return tftp_cmd_ls(obj, path, buf);
 }
 
 int tftp_cmd_mkdir(void* obj, const char* path)
@@ -904,6 +1039,20 @@ int tftp_cmd_size(void* obj, const char* path, int* size)
 
 int tftp_cmd_chmod(void* obj, const char* path, const char* mode)
 {
+    char* cp;
+    char cmd[PKTSIZE];
+    char msg[PKTSIZE];
+    int msgSize = 0;
+    memset(cmd, 0, PKTSIZE);
+
+    cp = cmd;
+    strcpy(cp, path);
+    cp += strlen(path);
+    *cp++ = '\0';
+    strcpy(cp, mode);
+    cp += strlen(mode);
+    *cp++ = '\0';
+    return exe_cmd(obj, CHMOD, cmd, cp - cmd, msg, msgSize);
 }
 
 int tftp_cmd_md5(void* obj, const char* path, char* md5)
