@@ -38,27 +38,33 @@
  * TFTP User Program -- Protocol Machines
  */
 
-extern union sock_addr peeraddr; /* filled in by main */
-extern int f;                    /* the opened socket */
-extern int trace;
-extern int verbose;
-extern int rexmtval;
-extern int maxtimeout;
+struct modes
+{
+    const char* m_name;
+    const char* m_mode;
+    int m_openflags;
+};
 
+static const struct modes modes[]
+    = { { "netascii", "netascii", O_TEXT }, { "ascii", "netascii", O_TEXT }, { "octet", "octet", O_BINARY },
+        { "binary", "octet", O_BINARY },    { "image", "octet", O_BINARY },  { 0, 0, 0 } };
+
+#define MODE_OCTET    (&modes[2])
+#define MODE_NETASCII (&modes[0])
+#define MODE_DEFAULT  MODE_NETASCII
+
+#define TIMEOUT   5 /* secs between rexmt's */
 #define PORT_FROM 61000
 #define PORT_TO   63000
 #define PKTSIZE   SEGSIZE + 4
 char ackbuf[PKTSIZE];
 char cmdbuf[PKTSIZE];
 int timeout;
+int rexmtval;
+int maxtimeout;
 sigjmp_buf toplevel;
 sigjmp_buf timeoutbuf;
 
-enum Transfer_mode
-{
-    MODE_ASCII,
-    MODE_BINARY
-};
 struct tftpObj
 {
     int socket;
@@ -66,25 +72,27 @@ struct tftpObj
     int timeout;
     int trace;
     int verbose;
-    int mode;
+    int connected;
+    int literal;
+    struct modes* mode;
     union sock_addr peeraddr;
     union sock_addr localaddr;
 };
 
-static void nak(int, const char*);
+static void nak(struct tftpObj*, int, const char*);
 static int makerequest(int, const char*, struct tftphdr*, const char*);
 static void printstats(const char*, unsigned long);
 static void startclock(void);
 static void stopclock(void);
 static void timer(int);
 static void tpacket(const char*, struct tftphdr*, int);
-static int send_cmd_reply(void* obj, char* send, int sendLen, char* reply, int replyLen);
+static int send_cmd_reply(struct tftpObj* obj, char* send, int sendLen, char* reply, int replyLen);
 static int exe_cmd(void* obj, u_short opcode, const char* cmd, int cmdSize, char* msg, int msgSize);
 
 /*
  * Send the requested file.
  */
-void tftp_put(int fd, const char* name, const char* mode)
+int tftp_cmd_put(void* obj, const char* local, const char* remote)
 {
     struct tftphdr* ap; /* data and ack packets */
     struct tftphdr* dp;
@@ -97,30 +105,37 @@ void tftp_put(int fd, const char* name, const char* mode)
     socklen_t fromlen;
     FILE* file;
     u_short ap_opcode, ap_block;
+    struct tftpObj* tftp;
+    int ret = 0;
 
-    startclock();          /* start stat's clock */
+    startclock(); /* start stat's clock */
+    tftp       = (struct tftpObj*)obj;
     dp         = r_init(); /* reset fillbuf/read-ahead code */
     ap         = (struct tftphdr*)ackbuf;
-    convert    = !strcmp(mode, "netascii");
-    file       = fdopen(fd, convert ? "rt" : "rb");
+    convert    = !strcmp(tftp->mode->m_mode, "netascii");
     block      = 0;
     is_request = 1; /* First packet is the actual WRQ */
     amount     = 0;
+    file       = fopen(local, convert ? "rt" : "rb");
+    if (!file)
+    {
+        printf("Failed to open file: %s \n", local);
+        return -1;
+    }
 
     bsd_signal(SIGALRM, timer);
     do
     {
         if (is_request)
         {
-            size = makerequest(WRQ, name, dp, mode) - 4;
+            size = makerequest(WRQ, remote, dp, tftp->mode->m_mode) - 4;
         }
         else
         {
-            /*      size = read(fd, dp->th_data, SEGSIZE);   */
             size = readit(file, &dp, convert);
             if (size < 0)
             {
-                nak(errno + 100, NULL);
+                nak(tftp, errno + 100, NULL);
                 break;
             }
             dp->th_opcode = htons((u_short)DATA);
@@ -129,31 +144,33 @@ void tftp_put(int fd, const char* name, const char* mode)
         timeout = 0;
         (void)sigsetjmp(timeoutbuf, 1);
 
-        if (trace)
+        if (tftp->trace)
             tpacket("sent", dp, size + 4);
-        n = sendto(f, dp, size + 4, 0, &peeraddr.sa, SOCKLEN(&peeraddr));
+        n = sendto(tftp->socket, dp, size + 4, 0, &tftp->peeraddr.sa, SOCKLEN(&tftp->peeraddr));
         if (n != size + 4)
         {
             perror("tftp: sendto");
+            ret = -1;
             goto abort;
         }
         read_ahead(file, convert);
         for (;;)
         {
-            alarm(rexmtval);
+            alarm(tftp->rexmt);
             do
             {
                 fromlen = sizeof(from);
-                n       = recvfrom(f, ackbuf, sizeof(ackbuf), 0, &from.sa, &fromlen);
+                n       = recvfrom(tftp->socket, ackbuf, sizeof(ackbuf), 0, &from.sa, &fromlen);
             } while (n <= 0);
             alarm(0);
             if (n < 0)
             {
                 perror("tftp: recvfrom");
+                ret = -1;
                 goto abort;
             }
-            sa_set_port(&peeraddr, SOCKPORT(&from)); /* added */
-            if (trace)
+            sa_set_port(&tftp->peeraddr, SOCKPORT(&from)); /* added */
+            if (tftp->trace)
                 tpacket("received", ap, n);
             /* should verify packet came from server */
             ap_opcode = ntohs((u_short)ap->th_opcode);
@@ -161,6 +178,7 @@ void tftp_put(int fd, const char* name, const char* mode)
             if (ap_opcode == ERROR)
             {
                 printf("Error code %d: %s\n", ap_block, ap->th_msg);
+                ret = -1;
                 goto abort;
             }
             if (ap_opcode == ACK)
@@ -174,8 +192,8 @@ void tftp_put(int fd, const char* name, const char* mode)
                 /* On an error, try to synchronize
                  * both sides.
                  */
-                j = synchnet(f);
-                if (j && trace)
+                j = synchnet(tftp->socket);
+                if (j && tftp->trace)
                 {
                     printf("discarded %d packets\n", j);
                 }
@@ -194,14 +212,16 @@ void tftp_put(int fd, const char* name, const char* mode)
 abort:
     fclose(file);
     stopclock();
-    if (amount > 0)
+    if (amount > 0 && tftp->verbose)
         printstats("Sent", amount);
+
+    return ret;
 }
 
 /*
  * Receive a file.
  */
-void tftp_get(int fd, const char* name, const char* mode)
+int tftp_cmd_get(void* obj, const char* local, const char* remote)
 {
     struct tftphdr* ap;
     struct tftphdr* dp;
@@ -214,22 +234,30 @@ void tftp_get(int fd, const char* name, const char* mode)
     FILE* file;
     volatile int convert; /* true if converting crlf -> lf */
     u_short dp_opcode, dp_block;
+    struct tftpObj* tftp;
+    int ret = 0;
 
     startclock();
+    tftp      = (struct tftpObj*)obj;
     dp        = w_init();
     ap        = (struct tftphdr*)ackbuf;
-    convert   = !strcmp(mode, "netascii");
-    file      = fdopen(fd, convert ? "wt" : "wb");
+    convert   = !strcmp(tftp->mode->m_mode, "netascii");
     block     = 1;
     firsttrip = 1;
     amount    = 0;
+    file      = fopen(local, convert ? "wt" : "wb");
+    if (!file)
+    {
+        printf("Failed to open file: %s\n", local);
+        return -1;
+    }
 
     bsd_signal(SIGALRM, timer);
     do
     {
         if (firsttrip)
         {
-            size      = makerequest(RRQ, name, ap, mode);
+            size      = makerequest(RRQ, remote, ap, tftp->mode->m_mode);
             firsttrip = 0;
         }
         else
@@ -242,31 +270,33 @@ void tftp_get(int fd, const char* name, const char* mode)
         timeout = 0;
         (void)sigsetjmp(timeoutbuf, 1);
     send_ack:
-        if (trace)
+        if (tftp->trace)
             tpacket("sent", ap, size);
-        if (sendto(f, ackbuf, size, 0, &peeraddr.sa, SOCKLEN(&peeraddr)) != size)
+        if (sendto(tftp->socket, ackbuf, size, 0, &tftp->peeraddr.sa, SOCKLEN(&tftp->peeraddr)) != size)
         {
             alarm(0);
             perror("tftp: sendto");
+            ret = -1;
             goto abort;
         }
         write_behind(file, convert);
         for (;;)
         {
-            alarm(rexmtval);
+            alarm(tftp->rexmt);
             do
             {
                 fromlen = sizeof(from);
-                n       = recvfrom(f, dp, PKTSIZE, 0, &from.sa, &fromlen);
+                n       = recvfrom(tftp->socket, dp, PKTSIZE, 0, &from.sa, &fromlen);
             } while (n <= 0);
             alarm(0);
             if (n < 0)
             {
                 perror("tftp: recvfrom");
+                ret = -1;
                 goto abort;
             }
-            sa_set_port(&peeraddr, SOCKPORT(&from)); /* added */
-            if (trace)
+            sa_set_port(&tftp->peeraddr, SOCKPORT(&from)); /* added */
+            if (tftp->trace)
                 tpacket("received", dp, n);
             /* should verify client address */
             dp_opcode = ntohs((u_short)dp->th_opcode);
@@ -274,6 +304,7 @@ void tftp_get(int fd, const char* name, const char* mode)
             if (dp_opcode == ERROR)
             {
                 printf("Error code %d: %s\n", dp_block, dp->th_msg);
+                ret = -1;
                 goto abort;
             }
             if (dp_opcode == DATA)
@@ -287,8 +318,8 @@ void tftp_get(int fd, const char* name, const char* mode)
                 /* On an error, try to synchronize
                  * both sides.
                  */
-                j = synchnet(f);
-                if (j && trace)
+                j = synchnet(tftp->socket);
+                if (j && tftp->trace)
                 {
                     printf("discarded %d packets\n", j);
                 }
@@ -302,7 +333,7 @@ void tftp_get(int fd, const char* name, const char* mode)
         size = writeit(file, &dp, n - 4, convert);
         if (size < 0)
         {
-            nak(errno + 100, NULL);
+            nak(tftp, errno + 100, NULL);
             break;
         }
         amount += size;
@@ -310,12 +341,14 @@ void tftp_get(int fd, const char* name, const char* mode)
 abort:                                   /* ok to ack, since user */
     ap->th_opcode = htons((u_short)ACK); /* has seen err msg */
     ap->th_block  = htons((u_short)block);
-    (void)sendto(f, ackbuf, 4, 0, (struct sockaddr*)&peeraddr, SOCKLEN(&peeraddr));
+    (void)sendto(tftp->socket, ackbuf, 4, 0, (struct sockaddr*)&tftp->peeraddr, SOCKLEN(&tftp->peeraddr));
     write_behind(file, convert); /* flush last buffer */
     fclose(file);
     stopclock();
-    if (amount > 0)
+    if (amount > 0 && tftp->verbose)
         printstats("Received", amount);
+
+    return ret;
 }
 
 static int makerequest(int request, const char* name, struct tftphdr* tp, const char* mode)
@@ -353,7 +386,7 @@ static const char* const errmsgs[] = {
  * standard TFTP codes, or a UNIX errno
  * offset by 100.
  */
-static void nak(int error, const char* msg)
+static void nak(struct tftpObj* tftp, int error, const char* msg)
 {
     struct tftphdr* tp;
     int length;
@@ -384,9 +417,9 @@ static void nak(int error, const char* msg)
     memcpy(tp->th_msg, msg, length);
     length += 4; /* Add space for header */
 
-    if (trace)
+    if (tftp->trace)
         tpacket("sent", tp, length);
-    if (sendto(f, ackbuf, length, 0, &peeraddr.sa, SOCKLEN(&peeraddr)) != length)
+    if (sendto(tftp->socket, ackbuf, length, 0, &tftp->peeraddr.sa, SOCKLEN(&tftp->peeraddr)) != length)
         perror("nak");
 }
 
@@ -460,12 +493,9 @@ static void printstats(const char* direction, unsigned long amount)
     double delta;
 
     delta = (tstop.tv_sec + (tstop.tv_usec / 100000.0)) - (tstart.tv_sec + (tstart.tv_usec / 100000.0));
-    if (verbose)
-    {
-        printf("%s %lu bytes in %.1f seconds", direction, amount, delta);
-        printf(" [%.0f bit/s]", (amount * 8.) / delta);
-        putchar('\n');
-    }
+    printf("%s %lu bytes in %.1f seconds", direction, amount, delta);
+    printf(" [%.0f bit/s]", (amount * 8.) / delta);
+    putchar('\n');
 }
 
 static void timer(int sig)
@@ -496,12 +526,14 @@ void* tftp_create(const char* serverip, int port, const char* localip, int local
         return NULL;
     }
 
-    obj->mode    = MODE_BINARY;
-    obj->rexmt   = 60;
-    obj->timeout = 40;
-    obj->trace   = 0;
-    obj->verbose = 0;
-    obj->socket  = socket(AF_INET, SOCK_DGRAM, 0);
+    obj->mode  = MODE_DEFAULT;
+    obj->rexmt = rexmtval = TIMEOUT;
+    obj->timeout = maxtimeout = 5 * TIMEOUT;
+    obj->trace                = 0;
+    obj->verbose              = 0;
+    obj->connected            = 0;
+    obj->literal              = 0;
+    obj->socket               = socket(AF_INET, SOCK_DGRAM, 0);
     if (obj->socket < 0)
     {
         printf("Failed to create socket \n");
@@ -514,6 +546,7 @@ void* tftp_create(const char* serverip, int port, const char* localip, int local
 
     if (serverip != NULL)
     {
+        obj->connected                   = 1;
         obj->peeraddr.si.sin_family      = AF_INET;
         obj->peeraddr.si.sin_addr.s_addr = inet_addr(serverip);
         obj->peeraddr.si.sin_port        = htons(port);
@@ -563,50 +596,139 @@ void tftp_destroy(void* obj)
 }
 
 // setting
+int tftp_set_server(void* obj, const char* serverip, int port)
+{
+    struct tftpObj* tftp;
+    if (!obj || !serverip)
+    {
+        return -1;
+    }
+
+    tftp                              = (struct tftpObj*)obj;
+    tftp->connected                   = 1;
+    tftp->peeraddr.si.sin_family      = AF_INET;
+    tftp->peeraddr.si.sin_addr.s_addr = inet_addr(serverip);
+    tftp->peeraddr.si.sin_port        = htons(port);
+
+    return 0;
+}
 int tftp_set_mode(void* obj, const char* mode)
 {
-}
-int tftp_set_verbose(void* obj, int onoff)
-{
-}
-int tftp_set_trace(void* obj, int onoff)
-{
-}
-int tftp_set_rexmt(void* obj, int rexmt)
-{
-}
-int tftp_set_timeout(void* obj, int timeout)
-{
+    int ret = 0;
+    const struct modes* p;
+    struct tftpObj* tftp;
+    if (!obj)
+    {
+        return -1;
+    }
+
+    tftp = (struct tftpObj*)obj;
+
+    for (p = modes; p->m_name; p++)
+    {
+        if (!strcmp(mode, p->m_name))
+            break;
+    }
+
+    if (p->m_name)
+    {
+        tftp->mode = p;
+    }
+    else
+    {
+        ret = -1;
+        printf("invalid mode: %s\n", mode);
+    }
+
+    return ret;
 }
 
-int send_cmd_reply(void* obj, char* send, int sendLen, char* reply, int replyLen)
+int tftp_set_verbose(void* obj, int onoff)
+{
+    struct tftpObj* tftp;
+    if (!obj)
+    {
+        return -1;
+    }
+
+    tftp          = (struct tftpObj*)obj;
+    tftp->verbose = onoff;
+}
+
+int tftp_set_trace(void* obj, int onoff)
+{
+    struct tftpObj* tftp;
+    if (!obj)
+    {
+        return -1;
+    }
+
+    tftp        = (struct tftpObj*)obj;
+    tftp->trace = onoff;
+}
+
+int tftp_set_literal(void* obj, int onoff)
+{
+    struct tftpObj* tftp;
+    if (!obj)
+    {
+        return -1;
+    }
+
+    tftp          = (struct tftpObj*)obj;
+    tftp->literal = onoff;
+}
+
+int tftp_set_rexmt(void* obj, int rexmt)
+{
+    struct tftpObj* tftp;
+    if (!obj)
+    {
+        return -1;
+    }
+
+    tftp        = (struct tftpObj*)obj;
+    tftp->rexmt = rexmtval = rexmt;
+}
+
+int tftp_set_timeout(void* obj, int timeout)
+{
+    struct tftpObj* tftp;
+    if (!obj)
+    {
+        return -1;
+    }
+
+    tftp          = (struct tftpObj*)obj;
+    tftp->timeout = maxtimeout = timeout;
+}
+
+int send_cmd_reply(struct tftpObj* obj, char* send, int sendLen, char* reply, int replyLen)
 {
     int n = 0;
     union sock_addr from;
     socklen_t fromlen;
-    struct tftpObj* tftp;
     struct tftphdr* ap;
     if (!obj)
     {
         return -1;
     }
 
-    tftp    = (struct tftpObj*)obj;
     ap      = (struct tftphdr*)reply;
     timeout = 0;
     (void)sigsetjmp(timeoutbuf, 1);
-    if (sendto(tftp->socket, send, sendLen, 0, &tftp->peeraddr.sa, SOCKLEN(&tftp->peeraddr)) != sendLen)
+    if (sendto(obj->socket, send, sendLen, 0, &obj->peeraddr.sa, SOCKLEN(&obj->peeraddr)) != sendLen)
     {
         printf("tftp:sendto [cd] error\n");
         return -1;
     }
 
     // waiting for reply
-    alarm(rexmtval);
+    alarm(obj->rexmt);
     do
     {
         fromlen = sizeof(from);
-        n       = recvfrom(tftp->socket, reply, PKTSIZE, 0, &from.sa, &fromlen);
+        n       = recvfrom(obj->socket, reply, PKTSIZE, 0, &from.sa, &fromlen);
     } while (n <= 0);
     alarm(0);
 
@@ -618,7 +740,7 @@ int send_cmd_reply(void* obj, char* send, int sendLen, char* reply, int replyLen
     else
     {
         replyLen = n;
-        if (trace)
+        if (obj->trace)
             tpacket("received", ap, n);
     }
 

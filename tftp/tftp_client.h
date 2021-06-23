@@ -34,17 +34,16 @@
 #ifndef TFTP_CLIENT_H
 #define TFTP_CLIENT_H
 
-void tftp_get(int, const char*, const char*);
-void tftp_put(int, const char*, const char*);
-
 // obj
 void* tftp_create(const char* serverip, int port, const char* localip, int localport);
 void tftp_destroy(void* obj);
 
 // setting
+int tftp_set_server(void* obj, const char* serverip, int port);
 int tftp_set_mode(void* obj, const char* mode); // set file transfer mode: "netascii", "octet"
 int tftp_set_verbose(void* obj, int onoff);     // toggle verbose mode
 int tftp_set_trace(void* obj, int onoff);       // toggle packet tracing
+int tftp_set_literal(void* obj, int onoff);     // toggle literal mode, ignore ':' in file name
 int tftp_set_rexmt(void* obj, int rexmt);       // set per-packet transmission timeout
 int tftp_set_timeout(void* obj, int timeout);   // set total retransmission timeout
 
