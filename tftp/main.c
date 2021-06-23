@@ -417,7 +417,7 @@ void setpeer(int argc, char* argv[])
     if (verbose)
         printf("Connected to %s (%s), port %u\n", hostname, tp, (unsigned int)ntohs(port));
 
-    tftp_set_server(tftp, tp, port);
+    tftp_set_server(tftp, tp, ntohs(port));
     connected = 1;
 }
 
@@ -502,7 +502,7 @@ void put(int argc, char* argv[])
             printf("%s: unknown host\n", argv[1]);
             return;
         }
-        tftp_set_server(tftp, tp, port);
+        tftp_set_server(tftp, tp, ntohs(port));
         connected = 1;
     }
     if (!connected)
@@ -593,7 +593,7 @@ void get(int argc, char* argv[])
                 printf("%s: unknown host\n", argv[1]);
                 return;
             }
-            tftp_set_server(tftp, tp, port);
+            tftp_set_server(tftp, tp, ntohs(port));
             connected = 1;
         }
         if (argc < 4)
@@ -679,7 +679,9 @@ void setliteral(int argc, char* argv[])
 {
     (void)argc;
     (void)argv; /* Quiet unused warning */
-    tftp_set_literal(tftp, !literal);
+
+    literal = !literal;
+    tftp_set_literal(tftp, literal);
     printf("Literal mode %s.\n", literal ? "on" : "off");
 }
 
@@ -879,7 +881,8 @@ void settrace(int argc, char* argv[])
     (void)argc;
     (void)argv; /* Quiet unused warning */
 
-    tftp_set_trace(tftp, !trace);
+    trace = !trace;
+    tftp_set_trace(tftp, trace);
     printf("Packet tracing %s.\n", trace ? "on" : "off");
 }
 
@@ -888,7 +891,8 @@ void setverbose(int argc, char* argv[])
     (void)argc;
     (void)argv; /* Quiet unused warning */
 
-    tftp_set_verbose(tftp, !verbose);
+    verbose = !verbose;
+    tftp_set_verbose(tftp, verbose);
     printf("Verbose mode %s.\n", verbose ? "on" : "off");
 }
 

@@ -53,6 +53,16 @@ static const struct modes modes[]
 #define MODE_NETASCII (&modes[0])
 #define MODE_DEFAULT  MODE_NETASCII
 
+#define CHECK_CONNECTED(a)                            \
+    do                                                \
+    {                                                 \
+        if (!(a))                                     \
+        {                                             \
+            printf("No target machine specified.\n"); \
+            return -1;                                \
+        }                                             \
+    } while (0)
+
 #define TIMEOUT   5 /* secs between rexmt's */
 #define PORT_FROM 61000
 #define PORT_TO   63000
@@ -292,8 +302,6 @@ void* tftp_create(const char* serverip, int port, const char* localip, int local
     else
     {
         printf("server ip is NULL\n");
-        free(obj);
-        return NULL;
     }
 
     obj->localaddr.si.sin_family = AF_INET;
@@ -520,6 +528,8 @@ int exe_cmd(void* obj, u_short opcode, const char* cmd, int cmdSize, char* msg, 
     cp->th_opcode = htons(opcode);
     stuff         = (char*)&(cp->th_stuff);
     size          = sizeof(cp->th_opcode);
+    CHECK_CONNECTED(tftp->connected);
+
     if (!cmd)
     {
         memcpy(stuff, cmd, cmdSize);
@@ -562,6 +572,7 @@ int tftp_cmd_put(void* obj, const char* local, const char* remote)
     u_short ap_opcode, ap_block;
     struct tftpObj* tftp;
     int ret = 0;
+    union sock_addr peeraddr;
 
     startclock(); /* start stat's clock */
     tftp       = (struct tftpObj*)obj;
@@ -571,12 +582,15 @@ int tftp_cmd_put(void* obj, const char* local, const char* remote)
     block      = 0;
     is_request = 1; /* First packet is the actual WRQ */
     amount     = 0;
-    file       = fopen(local, convert ? "rt" : "rb");
+
+    CHECK_CONNECTED(tftp->connected);
+    file = fopen(local, convert ? "rt" : "rb");
     if (!file)
     {
         printf("Failed to open file: %s \n", local);
         return -1;
     }
+    memcpy(&peeraddr, &tftp->peeraddr, sizeof(union sock_addr));
 
     bsd_signal(SIGALRM, timer);
     do
@@ -601,7 +615,7 @@ int tftp_cmd_put(void* obj, const char* local, const char* remote)
 
         if (tftp->trace)
             tpacket("sent", dp, size + 4);
-        n = sendto(tftp->socket, dp, size + 4, 0, &tftp->peeraddr.sa, SOCKLEN(&tftp->peeraddr));
+        n = sendto(tftp->socket, dp, size + 4, 0, &peeraddr.sa, SOCKLEN(&peeraddr));
         if (n != size + 4)
         {
             perror("tftp: sendto");
@@ -624,7 +638,7 @@ int tftp_cmd_put(void* obj, const char* local, const char* remote)
                 ret = -1;
                 goto abort;
             }
-            sa_set_port(&tftp->peeraddr, SOCKPORT(&from)); /* added */
+            sa_set_port(&peeraddr, SOCKPORT(&from)); /* added */
             if (tftp->trace)
                 tpacket("received", ap, n);
             /* should verify packet came from server */
@@ -688,6 +702,7 @@ int tftp_cmd_get(void* obj, const char* local, const char* remote)
     u_short dp_opcode, dp_block;
     struct tftpObj* tftp;
     int ret = 0;
+    union sock_addr peeraddr;
 
     startclock();
     tftp      = (struct tftpObj*)obj;
@@ -697,12 +712,15 @@ int tftp_cmd_get(void* obj, const char* local, const char* remote)
     block     = 1;
     firsttrip = 1;
     amount    = 0;
-    file      = fopen(local, convert ? "wt" : "wb");
+
+    CHECK_CONNECTED(tftp->connected);
+    file = fopen(local, convert ? "wt" : "wb");
     if (!file)
     {
         printf("Failed to open file: %s\n", local);
         return -1;
     }
+    memcpy(&peeraddr, &tftp->peeraddr, sizeof(union sock_addr));
 
     bsd_signal(SIGALRM, timer);
     do
@@ -724,7 +742,7 @@ int tftp_cmd_get(void* obj, const char* local, const char* remote)
     send_ack:
         if (tftp->trace)
             tpacket("sent", ap, size);
-        if (sendto(tftp->socket, ackbuf, size, 0, &tftp->peeraddr.sa, SOCKLEN(&tftp->peeraddr)) != size)
+        if (sendto(tftp->socket, ackbuf, size, 0, &peeraddr.sa, SOCKLEN(&peeraddr)) != size)
         {
             alarm(0);
             perror("tftp: sendto");
@@ -747,7 +765,7 @@ int tftp_cmd_get(void* obj, const char* local, const char* remote)
                 ret = -1;
                 goto abort;
             }
-            sa_set_port(&tftp->peeraddr, SOCKPORT(&from)); /* added */
+            sa_set_port(&peeraddr, SOCKPORT(&from)); /* added */
             if (tftp->trace)
                 tpacket("received", dp, n);
             /* should verify client address */
