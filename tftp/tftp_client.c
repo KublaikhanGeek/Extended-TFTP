@@ -811,7 +811,7 @@ int tftp_cmd_get(void* obj, const char* local, const char* remote)
 abort:                                   /* ok to ack, since user */
     ap->th_opcode = htons((u_short)ACK); /* has seen err msg */
     ap->th_block  = htons((u_short)block);
-    (void)sendto(tftp->socket, ackbuf, 4, 0, (struct sockaddr*)&tftp->peeraddr, SOCKLEN(&tftp->peeraddr));
+    (void)sendto(tftp->socket, ackbuf, 4, 0, (struct sockaddr*)&peeraddr, SOCKLEN(&peeraddr));
     write_behind(file, convert); /* flush last buffer */
     fclose(file);
     stopclock();
