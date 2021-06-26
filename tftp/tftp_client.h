@@ -62,6 +62,5 @@ int tftp_cmd_mkdir(void* obj, const char* path);
 int tftp_cmd_rmdir(void* obj, const char* path);
 int tftp_cmd_size(void* obj, const char* path, int* size);
 int tftp_cmd_chmod(void* obj, const char* path, const char* mode);
-int tftp_cmd_md5(void* obj, const char* path, char* md5);
 
 #endif

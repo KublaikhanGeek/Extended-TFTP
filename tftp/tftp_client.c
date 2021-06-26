@@ -1054,9 +1054,3 @@ int tftp_cmd_chmod(void* obj, const char* path, const char* mode)
     *cp++ = '\0';
     return exe_cmd(obj, CHMOD, cmd, cp - cmd, msg, msgSize);
 }
-
-int tftp_cmd_md5(void* obj, const char* path, char* md5)
-{
-    int msgSize = 0;
-    return exe_cmd(obj, MD5, path, strlen(path) + 1, md5, msgSize);
-}

@@ -309,6 +309,39 @@ typedef int socklen_t;
 #define MD5    17
 #define RETURN 18
 
+#define TFTP_NOOPOK   200
+#define TFTP_CHMODOK  200
+#define TFTP_SIZEOK   213
+#define TFTP_MD5OK    213
+#define TFTP_CWDOK    250
+#define TFTP_CDUPOK   250
+#define TFTP_RMDIROK  250
+#define TFTP_DELEOK   250
+#define TFTP_RENAMEOK 250
+#define TFTP_RENAMEOK 250
+#define TFTP_PWDOK    257
+#define TFTP_MKDIROK  257
+
+#define TFTP_BADCMD         500
+#define TFTP_BADOPTS        501
+#define TFTP_COMMANDNOTIMPL 502
+#define TFTP_NEEDUSER       503
+#define TFTP_NEEDRNFR       503
+#define TFTP_BADPBSZ        503
+#define TFTP_BADPROT        503
+#define TFTP_BADSTRU        504
+#define TFTP_BADMODE        504
+#define TFTP_BADAUTH        504
+#define TFTP_NOSUCHPROT     504
+#define TFTP_NEEDENCRYPT    522
+#define TFTP_EPSUBAD        522
+#define TFTP_DATATLSBAD     522
+#define TFTP_LOGINERR       530
+#define TFTP_NOHANDLEPROT   536
+#define TFTP_FILEFAIL       550
+#define TFTP_NOPERM         550
+#define TFTP_UPLOADFAIL     55
+
 /* Prototypes for libxtra functions */
 
 void* xmalloc(size_t);
