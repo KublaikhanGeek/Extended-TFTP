@@ -226,6 +226,10 @@ static void tpacket(const char* s, struct tftphdr* tp, int n)
         printf("<block=%d>\n", ntohs(tp->th_block));
         break;
 
+    case OACK:
+        printf("\n", ntohs(tp->th_block));
+        break;
+
     case ERROR:
         printf("<code=%d, msg=%s>\n", ntohs(tp->th_code), tp->th_msg);
         break;
@@ -657,7 +661,11 @@ int tftp_cmd_put(void* obj, const char* local, const char* remote, int* localsiz
                 tsize = stbuf.st_size;
             }
             *localsize = tsize;
-            size       = makerequest(WRQ, remote, dp, tftp->mode->m_mode, tftp->blocksize, tsize) - 4;
+            if (tftp->blocksize > 0)
+            {
+                segsize = tftp->blocksize;
+            }
+            size = makerequest(WRQ, remote, dp, tftp->mode->m_mode, tftp->blocksize, tsize) - 4;
         }
         else
         {
@@ -710,10 +718,11 @@ int tftp_cmd_put(void* obj, const char* local, const char* remote, int* localsiz
                 ret = -1;
                 goto abort;
             }
+
             if (ap_opcode == OACK)
             {
                 int argn  = 0;
-                char* tmp = ap->th_data;
+                char* tmp = (char*)&(ap->th_stuff);
                 char* end = (char*)ap + n;
                 char* val;
                 char* opt = tmp;
@@ -727,6 +736,7 @@ int tftp_cmd_put(void* obj, const char* local, const char* remote, int* localsiz
 
                     if (*tmp)
                     {
+                        printf("Request not null-terminated \n");
                         break;
                     }
                     argn++;
@@ -737,8 +747,9 @@ int tftp_cmd_put(void* obj, const char* local, const char* remote, int* localsiz
                         if (!strcmp(opt, "blksize"))
                         {
                             tftp->blocksize = atoi(val);
+                            segsize         = tftp->blocksize;
                         }
-                        else if (!strcmp(opt, "tszie"))
+                        else if (!strcmp(opt, "tsize"))
                         {
                             tsize = atoi(val);
                         }
@@ -748,8 +759,8 @@ int tftp_cmd_put(void* obj, const char* local, const char* remote, int* localsiz
                         opt = ++tmp;
                     }
                 }
+                printf("blksize:%d, size:%d\n", segsize, tsize);
             }
-
             if (ap_opcode == ACK)
             {
                 int j;
@@ -778,7 +789,7 @@ int tftp_cmd_put(void* obj, const char* local, const char* remote, int* localsiz
         is_request = 0;
         block++;
         *transfersize = amount;
-    } while (size == SEGSIZE || block == 1);
+    } while (size == segsize || block == 1);
 abort:
     fclose(file);
     stopclock();
@@ -829,6 +840,10 @@ int tftp_cmd_get(void* obj, const char* local, const char* remote, int* remotesi
     {
         if (firsttrip)
         {
+            if (tftp->blocksize > 0)
+            {
+                segsize = tftp->blocksize;
+            }
             size      = makerequest(RRQ, remote, ap, tftp->mode->m_mode, tftp->blocksize, 0);
             firsttrip = 0;
         }
@@ -858,7 +873,7 @@ int tftp_cmd_get(void* obj, const char* local, const char* remote, int* remotesi
             do
             {
                 fromlen = sizeof(from);
-                n       = recvfrom(tftp->socket, dp, PKTSIZE, 0, &from.sa, &fromlen);
+                n       = recvfrom(tftp->socket, dp, MAX_SEGSIZE + 4, 0, &from.sa, &fromlen);
             } while (n <= 0);
             alarm(0);
             if (n < 0)
@@ -907,8 +922,9 @@ int tftp_cmd_get(void* obj, const char* local, const char* remote, int* remotesi
                         if (!strcmp(opt, "blksize"))
                         {
                             tftp->blocksize = atoi(val);
+                            segsize         = tftp->blocksize;
                         }
-                        else if (!strcmp(opt, "tszie"))
+                        else if (!strcmp(opt, "tsize"))
                         {
                             tsize       = atoi(val);
                             *remotesize = tsize;
@@ -919,6 +935,8 @@ int tftp_cmd_get(void* obj, const char* local, const char* remote, int* remotesi
                         opt = ++tmp;
                     }
                 }
+                continue;
+                printf("blksize:%d, size:%d\n", segsize, tsize);
             }
 
             if (dp_opcode == DATA)
@@ -952,7 +970,7 @@ int tftp_cmd_get(void* obj, const char* local, const char* remote, int* remotesi
         }
         amount += size;
         *transfersize = amount;
-    } while (size == SEGSIZE);
+    } while (size == segsize);
 abort:                                   /* ok to ack, since user */
     ap->th_opcode = htons((u_short)ACK); /* has seen err msg */
     ap->th_block  = htons((u_short)block);
@@ -1037,6 +1055,7 @@ int tftp_cmd_ls(void* obj, const char* path, char* buf)
     union sock_addr peeraddr;
     char* stuff;
     char* rwBuf;
+    int tsize;
 
     startclock();
     tftp      = (struct tftpObj*)obj;
@@ -1107,6 +1126,46 @@ int tftp_cmd_ls(void* obj, const char* path, char* buf)
                 ret = -1;
                 goto abort;
             }
+            if (dp_opcode == OACK)
+            {
+                int argn  = 0;
+                char* tmp = dp->th_data;
+                char* end = (char*)dp + n;
+                char* val;
+                char* opt = tmp;
+
+                while (tmp < end && *tmp)
+                {
+                    do
+                    {
+                        tmp++;
+                    } while (tmp < end && *tmp);
+
+                    if (*tmp)
+                    {
+                        break;
+                    }
+                    argn++;
+
+                    if (argn & 1)
+                    {
+                        val = ++tmp;
+                        if (!strcmp(opt, "blksize"))
+                        {
+                            tftp->blocksize = atoi(val);
+                            segsize         = tftp->blocksize;
+                        }
+                        else if (!strcmp(opt, "tsize"))
+                        {
+                            tsize = atoi(val);
+                        }
+                    }
+                    else
+                    {
+                        opt = ++tmp;
+                    }
+                }
+            }
             if (dp_opcode == DATA)
             {
                 int j;
@@ -1133,7 +1192,7 @@ int tftp_cmd_ls(void* obj, const char* path, char* buf)
         memcpy(rwBuf, dp->th_data, n - 4);
         rwBuf += (n - 4);
         amount += size;
-    } while (size == SEGSIZE);
+    } while (size == segsize);
 abort:                                   /* ok to ack, since user */
     ap->th_opcode = htons((u_short)ACK); /* has seen err msg */
     ap->th_block  = htons((u_short)block);

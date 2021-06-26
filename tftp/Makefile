@@ -6,12 +6,18 @@ include ../MRULES
 
 OBJS = tftp_client.$(O) main.$(O)
 
-all: tftp$(X) tftp.1
+OBJ_TESTS = tftp_client.$(O) test.$(O)
+
+all: tftp$(X) tftp.1 test
 
 tftp$(X): $(OBJS)
 	$(CC) $(LDFLAGS) $^ $(TFTP_LIBS) -o $@
 
+test$(X): $(OBJ_TESTS)
+	$(CC) -g -O0 $(LDFLAGS) $^ $(TFTP_LIBS) -o $@ -lpthread
+
 $(OBJS): ../common/tftpsubs.h
+$(OBJ_TESTS): ../common/tftpsubs.h
 
 tftp.1: tftp.1.in ../version
 	sed -e 's/@@VERSION@@/$(VERSION)/g' < $< > $@
