@@ -462,6 +462,8 @@ void put(int argc, char* argv[])
     int n, err;
     char *cp, *targ;
     char tmp[INET6_ADDRSTRLEN], *tp;
+    int filesize;
+    int transfersize;
 
     if (argc < 2)
     {
@@ -515,7 +517,7 @@ void put(int argc, char* argv[])
         cp = argc == 2 ? tail(targ) : argv[1];
         if (verbose)
             printf("putting %s to %s:%s [%s]\n", cp, hostname, targ, mode);
-        tftp_cmd_put(tftp, cp, targ);
+        tftp_cmd_put(tftp, cp, targ, &filesize, &transfersize);
         return;
     }
     /* this assumes the target is a directory */
@@ -527,7 +529,7 @@ void put(int argc, char* argv[])
         strcpy(cp, tail(argv[n]));
         if (verbose)
             printf("putting %s to %s:%s [%s]\n", argv[n], hostname, targ, mode);
-        tftp_cmd_put(tftp, cp, targ);
+        tftp_cmd_put(tftp, cp, targ, &filesize, &transfersize);
     }
 }
 
@@ -547,6 +549,8 @@ void get(int argc, char* argv[])
     char* cp;
     char* src;
     char tmp[INET6_ADDRSTRLEN], *tp;
+    int filesize;
+    int transfersize;
 
     if (argc < 2)
     {
@@ -601,13 +605,13 @@ void get(int argc, char* argv[])
             cp = argc == 3 ? argv[2] : tail(src);
             if (verbose)
                 printf("getting from %s:%s to %s [%s]\n", hostname, src, cp, mode);
-            tftp_cmd_get(tftp, cp, src);
+            tftp_cmd_get(tftp, cp, src, filesize, transfersize);
             break;
         }
         cp = tail(src); /* new .. jdg */
         if (verbose)
             printf("getting from %s:%s to %s [%s]\n", hostname, src, cp, mode);
-        tftp_cmd_get(tftp, cp, src);
+        tftp_cmd_get(tftp, cp, src, filesize, transfersize);
     }
 }
 

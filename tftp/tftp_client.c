@@ -78,6 +78,7 @@ sigjmp_buf timeoutbuf;
 struct tftpObj
 {
     int socket;
+    int blocksize;
     int rexmt;
     int timeout;
     int trace;
@@ -90,7 +91,7 @@ struct tftpObj
 };
 
 static void nak(struct tftpObj*, int, const char*);
-static int makerequest(int, const char*, struct tftphdr*, const char*);
+static int makerequest(int, const char*, struct tftphdr*, const char*, int, int);
 static void printstats(const char*, unsigned long);
 static void startclock(void);
 static void stopclock(void);
@@ -99,9 +100,10 @@ static void tpacket(const char*, struct tftphdr*, int);
 static int send_cmd_reply(struct tftpObj* obj, char* send, int sendLen, char* reply, int replyLen);
 static int exe_cmd(void* obj, u_short opcode, const char* cmd, int cmdSize, char* msg, int msgSize);
 
-static int makerequest(int request, const char* name, struct tftphdr* tp, const char* mode)
+static int makerequest(int request, const char* name, struct tftphdr* tp, const char* mode, int blocksize, int tsize)
 {
     char* cp;
+    char str[32] = { 0 };
 
     tp->th_opcode = htons((u_short)request);
     cp            = (char*)&(tp->th_stuff);
@@ -111,6 +113,29 @@ static int makerequest(int request, const char* name, struct tftphdr* tp, const 
     strcpy(cp, mode);
     cp += strlen(mode);
     *cp++ = '\0';
+
+    if (blocksize > 0)
+    {
+        strcpy(cp, "blksize");
+        cp += strlen("blksize");
+        *cp++ = '\0';
+
+        sprintf(str, "%d", blocksize);
+        strcpy(cp, str);
+        cp += strlen(str);
+        *cp++ = '\0';
+    }
+
+    strcpy(cp, "tsize");
+    cp += strlen("tsize");
+    *cp++ = '\0';
+
+    memset(str, 0, sizeof(str));
+    sprintf(str, "%d", tsize);
+    strcpy(cp, str);
+    cp += strlen(str);
+    *cp++ = '\0';
+
     return (cp - (char*)tp);
 }
 
@@ -173,8 +198,8 @@ static void nak(struct tftpObj* tftp, int error, const char* msg)
 
 static void tpacket(const char* s, struct tftphdr* tp, int n)
 {
-    static const char* opcodes[] = { "#0",   "RRQ", "WRQ", "DATA", "ACK",  "ERROR", "OACK",  "DELE", "CWD",   "LIST",
-                                     "NOOP", "MKD", "RMD", "PWD",  "CDUP", "SIZE",  "CHMOD", "MD5",  "RETURN" };
+    static const char* opcodes[] = { "#0",   "RRQ",  "WRQ", "DATA", "ACK", "ERROR", "OACK", "DELE",  "CWD",
+                                     "LIST", "NOOP", "MKD", "RMD",  "PWD", "CDUP",  "SIZE", "CHMOD", "RETURN" };
     char *cp, *file, *cmd;
     u_short op = ntohs((u_short)tp->th_opcode);
 
@@ -211,7 +236,6 @@ static void tpacket(const char* s, struct tftphdr* tp, int n)
     case MKD:
     case RMD:
     case SIZE:
-    case MD5:
         cmd = (char*)&(tp->th_stuff);
         printf("<cmd=%s>\n", cmd);
         break;
@@ -277,6 +301,7 @@ void* tftp_create(const char* serverip, int port, const char* localip, int local
     obj->mode  = MODE_DEFAULT;
     obj->rexmt = rexmtval = TIMEOUT;
     obj->timeout = maxtimeout = 5 * TIMEOUT;
+    obj->blocksize            = 0;
     obj->trace                = 0;
     obj->verbose              = 0;
     obj->connected            = 0;
@@ -399,6 +424,8 @@ int tftp_set_verbose(void* obj, int onoff)
 
     tftp          = (struct tftpObj*)obj;
     tftp->verbose = onoff;
+
+    return 0;
 }
 
 int tftp_set_trace(void* obj, int onoff)
@@ -411,6 +438,8 @@ int tftp_set_trace(void* obj, int onoff)
 
     tftp        = (struct tftpObj*)obj;
     tftp->trace = onoff;
+
+    return 0;
 }
 
 int tftp_set_literal(void* obj, int onoff)
@@ -423,6 +452,8 @@ int tftp_set_literal(void* obj, int onoff)
 
     tftp          = (struct tftpObj*)obj;
     tftp->literal = onoff;
+
+    return 0;
 }
 
 int tftp_set_rexmt(void* obj, int rexmt)
@@ -435,6 +466,8 @@ int tftp_set_rexmt(void* obj, int rexmt)
 
     tftp        = (struct tftpObj*)obj;
     tftp->rexmt = rexmtval = rexmt;
+
+    return 0;
 }
 
 int tftp_set_timeout(void* obj, int timeout)
@@ -447,6 +480,22 @@ int tftp_set_timeout(void* obj, int timeout)
 
     tftp          = (struct tftpObj*)obj;
     tftp->timeout = maxtimeout = timeout;
+
+    return 0;
+}
+
+int tftp_set_blocksize(void* obj, int blocksize)
+{
+    struct tftpObj* tftp;
+    if (!obj)
+    {
+        return -1;
+    }
+
+    tftp            = (struct tftpObj*)obj;
+    tftp->blocksize = blocksize;
+
+    return 0;
 }
 
 int send_cmd_reply(struct tftpObj* obj, char* send, int sendLen, char* reply, int replyLen)
@@ -557,7 +606,7 @@ int exe_cmd(void* obj, u_short opcode, const char* cmd, int cmdSize, char* msg, 
 }
 
 // cmd
-int tftp_cmd_put(void* obj, const char* local, const char* remote)
+int tftp_cmd_put(void* obj, const char* local, const char* remote, int* localsize, int* transfersize)
 {
     struct tftphdr* ap; /* data and ack packets */
     struct tftphdr* dp;
@@ -573,6 +622,7 @@ int tftp_cmd_put(void* obj, const char* local, const char* remote)
     struct tftpObj* tftp;
     int ret = 0;
     union sock_addr peeraddr;
+    int tsize = 0;
 
     startclock(); /* start stat's clock */
     tftp       = (struct tftpObj*)obj;
@@ -597,7 +647,17 @@ int tftp_cmd_put(void* obj, const char* local, const char* remote)
     {
         if (is_request)
         {
-            size = makerequest(WRQ, remote, dp, tftp->mode->m_mode) - 4;
+            struct stat stbuf;
+            if (stat(local, &stbuf) < 0)
+            {
+                printf("Failed to read file %s size \n", local);
+            }
+            else
+            {
+                tsize = stbuf.st_size;
+            }
+            *localsize = tsize;
+            size       = makerequest(WRQ, remote, dp, tftp->mode->m_mode, tftp->blocksize, tsize) - 4;
         }
         else
         {
@@ -650,6 +710,46 @@ int tftp_cmd_put(void* obj, const char* local, const char* remote)
                 ret = -1;
                 goto abort;
             }
+            if (ap_opcode == OACK)
+            {
+                int argn  = 0;
+                char* tmp = ap->th_data;
+                char* end = (char*)ap + n;
+                char* val;
+                char* opt = tmp;
+
+                while (tmp < end && *tmp)
+                {
+                    do
+                    {
+                        tmp++;
+                    } while (tmp < end && *tmp);
+
+                    if (*tmp)
+                    {
+                        break;
+                    }
+                    argn++;
+
+                    if (argn & 1)
+                    {
+                        val = ++tmp;
+                        if (!strcmp(opt, "blksize"))
+                        {
+                            tftp->blocksize = atoi(val);
+                        }
+                        else if (!strcmp(opt, "tszie"))
+                        {
+                            tsize = atoi(val);
+                        }
+                    }
+                    else
+                    {
+                        opt = ++tmp;
+                    }
+                }
+            }
+
             if (ap_opcode == ACK)
             {
                 int j;
@@ -677,6 +777,7 @@ int tftp_cmd_put(void* obj, const char* local, const char* remote)
             amount += size;
         is_request = 0;
         block++;
+        *transfersize = amount;
     } while (size == SEGSIZE || block == 1);
 abort:
     fclose(file);
@@ -687,7 +788,7 @@ abort:
     return ret;
 }
 
-int tftp_cmd_get(void* obj, const char* local, const char* remote)
+int tftp_cmd_get(void* obj, const char* local, const char* remote, int* remotesize, int* transfersize)
 {
     struct tftphdr* ap;
     struct tftphdr* dp;
@@ -701,7 +802,8 @@ int tftp_cmd_get(void* obj, const char* local, const char* remote)
     volatile int convert; /* true if converting crlf -> lf */
     u_short dp_opcode, dp_block;
     struct tftpObj* tftp;
-    int ret = 0;
+    int ret   = 0;
+    int tsize = 0;
     union sock_addr peeraddr;
 
     startclock();
@@ -727,7 +829,7 @@ int tftp_cmd_get(void* obj, const char* local, const char* remote)
     {
         if (firsttrip)
         {
-            size      = makerequest(RRQ, remote, ap, tftp->mode->m_mode);
+            size      = makerequest(RRQ, remote, ap, tftp->mode->m_mode, tftp->blocksize, 0);
             firsttrip = 0;
         }
         else
@@ -777,6 +879,48 @@ int tftp_cmd_get(void* obj, const char* local, const char* remote)
                 ret = -1;
                 goto abort;
             }
+
+            if (dp_opcode == OACK)
+            {
+                int argn  = 0;
+                char* tmp = dp->th_data;
+                char* end = (char*)dp + n;
+                char* val;
+                char* opt = tmp;
+
+                while (tmp < end && *tmp)
+                {
+                    do
+                    {
+                        tmp++;
+                    } while (tmp < end && *tmp);
+
+                    if (*tmp)
+                    {
+                        break;
+                    }
+                    argn++;
+
+                    if (argn & 1)
+                    {
+                        val = ++tmp;
+                        if (!strcmp(opt, "blksize"))
+                        {
+                            tftp->blocksize = atoi(val);
+                        }
+                        else if (!strcmp(opt, "tszie"))
+                        {
+                            tsize       = atoi(val);
+                            *remotesize = tsize;
+                        }
+                    }
+                    else
+                    {
+                        opt = ++tmp;
+                    }
+                }
+            }
+
             if (dp_opcode == DATA)
             {
                 int j;
@@ -807,6 +951,7 @@ int tftp_cmd_get(void* obj, const char* local, const char* remote)
             break;
         }
         amount += size;
+        *transfersize = amount;
     } while (size == SEGSIZE);
 abort:                                   /* ok to ack, since user */
     ap->th_opcode = htons((u_short)ACK); /* has seen err msg */

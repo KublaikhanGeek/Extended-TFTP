@@ -306,8 +306,7 @@ typedef int socklen_t;
 #define CDUP   14
 #define SIZE   15
 #define CHMOD  16
-#define MD5    17
-#define RETURN 18
+#define RETURN 17
 
 #define TFTP_NOOPOK   200
 #define TFTP_CHMODOK  200
