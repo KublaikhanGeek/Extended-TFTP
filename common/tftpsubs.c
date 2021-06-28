@@ -337,6 +337,57 @@ int set_sock_addr(char* host, union sock_addr* s, char** name)
     return 0;
 }
 
+int getlocalip(char* ip)
+{
+    char host[100] = { 0 };
+    if (gethostname(host, sizeof(host)) < 0)
+    {
+        return -1;
+    }
+    struct hostent* hp;
+    if ((hp = gethostbyname(host)) == NULL)
+    {
+        return -1;
+    }
+    strcpy(ip, inet_ntoa(*(struct in_addr*)hp->h_addr));
+
+    return 0;
+}
+
+int get_peer_addr(int sockfd, char* ip, int* port)
+{
+    struct sockaddr_in addr;
+    socklen_t len = sizeof(addr);
+
+    int ret = getpeername(sockfd, (struct sockaddr*)&addr, &len);
+    if (ret == -1)
+    {
+        return -1;
+    }
+
+    inet_ntop(AF_INET, (void*)&(addr.sin_addr), ip, INET_ADDRSTRLEN);
+    *port = ntohs(addr.sin_port);
+
+    return 0;
+}
+
+int get_socket_addr(int sockfd, char* ip, int* port)
+{
+    struct sockaddr_in addr;
+    socklen_t len = sizeof(addr);
+
+    int ret = getsockname(sockfd, (struct sockaddr*)&addr, &len);
+    if (ret == -1)
+    {
+        return -1;
+    }
+
+    inet_ntop(AF_INET, (void*)&(addr.sin_addr), ip, INET_ADDRSTRLEN);
+    *port = ntohs(addr.sin_port);
+
+    return 0;
+}
+
 #ifdef HAVE_IPV6
 int is_numeric_ipv6(const char* p)
 {

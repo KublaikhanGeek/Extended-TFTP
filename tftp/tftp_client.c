@@ -126,15 +126,18 @@ static int makerequest(int request, const char* name, struct tftphdr* tp, const 
         *cp++ = '\0';
     }
 
-    strcpy(cp, "tsize");
-    cp += strlen("tsize");
-    *cp++ = '\0';
+    if (strcmp(mode, "octet") == 0)
+    {
+        strcpy(cp, "tsize");
+        cp += strlen("tsize");
+        *cp++ = '\0';
 
-    memset(str, 0, sizeof(str));
-    sprintf(str, "%d", tsize);
-    strcpy(cp, str);
-    cp += strlen(str);
-    *cp++ = '\0';
+        memset(str, 0, sizeof(str));
+        sprintf(str, "%d", tsize);
+        strcpy(cp, str);
+        cp += strlen(str);
+        *cp++ = '\0';
+    }
 
     return (cp - (char*)tp);
 }
@@ -760,6 +763,7 @@ int tftp_cmd_put(void* obj, const char* local, const char* remote, int* localsiz
                     }
                 }
                 printf("blksize:%d, size:%d\n", segsize, tsize);
+                break;
             }
             if (ap_opcode == ACK)
             {
@@ -898,7 +902,7 @@ int tftp_cmd_get(void* obj, const char* local, const char* remote, int* remotesi
             if (dp_opcode == OACK)
             {
                 int argn  = 0;
-                char* tmp = dp->th_data;
+                char* tmp = (char*)&(dp->th_stuff);
                 char* end = (char*)dp + n;
                 char* val;
                 char* opt = tmp;
@@ -935,8 +939,12 @@ int tftp_cmd_get(void* obj, const char* local, const char* remote, int* remotesi
                         opt = ++tmp;
                     }
                 }
-                continue;
                 printf("blksize:%d, size:%d\n", segsize, tsize);
+
+                ap->th_opcode = htons((u_short)ACK);
+                ap->th_block  = htons(0);
+                size          = 4;
+                goto send_ack;
             }
 
             if (dp_opcode == DATA)
@@ -1165,6 +1173,7 @@ int tftp_cmd_ls(void* obj, const char* path, char* buf)
                         opt = ++tmp;
                     }
                 }
+                break;
             }
             if (dp_opcode == DATA)
             {
