@@ -97,8 +97,8 @@ static void startclock(void);
 static void stopclock(void);
 static void timer(int);
 static void tpacket(const char*, struct tftphdr*, int);
-static int send_cmd_reply(struct tftpObj* obj, char* send, int sendLen, char* reply, int replyLen);
-static int exe_cmd(void* obj, u_short opcode, const char* cmd, int cmdSize, char* msg, int msgSize);
+static int send_cmd_reply(struct tftpObj* obj, char* send, int sendLen, char* reply, int* replyLen);
+static int exe_cmd(void* obj, u_short opcode, const char* cmd, int cmdSize, char* msg, int* msgSize);
 
 static int makerequest(int request, const char* name, struct tftphdr* tp, const char* mode, int blocksize, int tsize)
 {
@@ -505,7 +505,7 @@ int tftp_set_blocksize(void* obj, int blocksize)
     return 0;
 }
 
-int send_cmd_reply(struct tftpObj* obj, char* send, int sendLen, char* reply, int replyLen)
+int send_cmd_reply(struct tftpObj* obj, char* send, int sendLen, char* reply, int* replyLen)
 {
     int n = 0;
     union sock_addr from;
@@ -541,7 +541,7 @@ int send_cmd_reply(struct tftpObj* obj, char* send, int sendLen, char* reply, in
     }
     else
     {
-        replyLen = n;
+        *replyLen = n;
         if (obj->trace)
             tpacket("received", ap, n);
     }
@@ -557,7 +557,7 @@ int send_cmd_reply(struct tftpObj* obj, char* send, int sendLen, char* reply, in
 // +---------+-------------+------+---+------+---+------+---+------+---+
 // |  RETURN | return code | msg1 | 0 | msg2 | 0 | msg3 | 0 | msgN | 0 |
 // +---------+-------------+------+---+------+---+------+---+------+---+
-int exe_cmd(void* obj, u_short opcode, const char* cmd, int cmdSize, char* msg, int msgSize)
+int exe_cmd(void* obj, u_short opcode, const char* cmd, int cmdSize, char* msg, int* msgSize)
 {
     char* stuff;
     struct tftphdr* cp;
@@ -569,30 +569,34 @@ int exe_cmd(void* obj, u_short opcode, const char* cmd, int cmdSize, char* msg, 
     int n         = 0;
     int ap_opcode = 0;
     int ap_code   = 0;
-    if (obj == NULL || cmd == NULL)
+    if (obj == NULL)
     {
-        printf("cmd is NULL\n");
+        printf("obj is NULL\n");
         return -1;
     }
 
     startclock();
     bsd_signal(SIGALRM, timer);
 
+    memset(cmdbuf, 0, sizeof(cmdbuf));
+    memset(ackbuf, 0, sizeof(ackbuf));
+
     tftp          = (struct tftpObj*)obj;
     cp            = (struct tftphdr*)cmdbuf;
     ap            = (struct tftphdr*)ackbuf;
-    cp->th_opcode = htons(opcode);
     stuff         = (char*)&(cp->th_stuff);
+    cp->th_opcode = htons(opcode);
     size          = sizeof(cp->th_opcode);
     CHECK_CONNECTED(tftp->connected);
 
-    if (!cmd)
+    if (cmd)
     {
         memcpy(stuff, cmd, cmdSize);
         size = cmdSize + sizeof(cp->th_opcode);
+        printf("cmd size: %d\n", size);
     }
 
-    if (send_cmd_reply(tftp, cmdbuf, size, ackbuf, n) < 0)
+    if (send_cmd_reply(tftp, cmdbuf, size, ackbuf, &n) < 0)
     {
         stopclock();
         return -1;
@@ -604,8 +608,8 @@ int exe_cmd(void* obj, u_short opcode, const char* cmd, int cmdSize, char* msg, 
     {
         printf("Return code %d: %s\n", ap_code, ap->th_msg);
         memcpy(msg, ap->th_msg, n - 4); // 4 for return head
-        msgSize = n - 4;
-        ap_code == 200 ? (ret = 0) : (ret = -1);
+        *msgSize = n - 4;
+        ret      = ap_code;
     }
     stopclock();
 
@@ -997,7 +1001,9 @@ int tftp_cmd_cd(void* obj, const char* path)
     int msgSize = 0;
     char msg[PKTSIZE];
     memset(msg, 0, PKTSIZE);
-    return exe_cmd(obj, CWD, path, strlen(path) + 1, msg, msgSize);
+
+    printf("cd path: %s\n", path);
+    return exe_cmd(obj, CWD, path, strlen(path) + 1, msg, &msgSize);
 }
 
 int tftp_cmd_cdup(void* obj)
@@ -1007,7 +1013,7 @@ int tftp_cmd_cdup(void* obj)
     char msg[PKTSIZE];
     strcpy(path, "..");
     memset(msg, 0, PKTSIZE);
-    return exe_cmd(obj, CDUP, path, strlen(path) + 1, msg, msgSize);
+    return exe_cmd(obj, CDUP, path, strlen(path) + 1, msg, &msgSize);
 }
 
 int tftp_cmd_lcd(void* obj, const char* path)
@@ -1018,7 +1024,7 @@ int tftp_cmd_lcd(void* obj, const char* path)
 int tftp_cmd_pwd(void* obj, char* pwd)
 {
     int msgSize = 0;
-    return exe_cmd(obj, PWD, NULL, 0, pwd, msgSize);
+    return exe_cmd(obj, PWD, NULL, 0, pwd, &msgSize);
 }
 
 int tftp_cmd_delete(void* obj, const char* path)
@@ -1026,7 +1032,7 @@ int tftp_cmd_delete(void* obj, const char* path)
     int msgSize = 0;
     char msg[PKTSIZE];
     memset(msg, 0, PKTSIZE);
-    return exe_cmd(obj, DELE, path, strlen(path) + 1, msg, msgSize);
+    return exe_cmd(obj, DELE, path, strlen(path) + 1, msg, &msgSize);
 }
 
 int tftp_cmd_rename(void* obj, const char* src, const char* dst)
@@ -1044,7 +1050,7 @@ int tftp_cmd_rename(void* obj, const char* src, const char* dst)
     strcpy(cp, dst);
     cp += strlen(dst);
     *cp++ = '\0';
-    return exe_cmd(obj, CHMOD, cmd, cp - cmd, msg, msgSize);
+    return exe_cmd(obj, CHMOD, cmd, cp - cmd, msg, &msgSize);
 }
 
 int tftp_cmd_ls(void* obj, const char* path, char* buf)
@@ -1223,7 +1229,7 @@ int tftp_cmd_mkdir(void* obj, const char* path)
     int msgSize = 0;
     char msg[PKTSIZE];
     memset(msg, 0, PKTSIZE);
-    return exe_cmd(obj, MKD, path, strlen(path) + 1, msg, msgSize);
+    return exe_cmd(obj, MKD, path, strlen(path) + 1, msg, &msgSize);
 }
 
 int tftp_cmd_rmdir(void* obj, const char* path)
@@ -1231,7 +1237,7 @@ int tftp_cmd_rmdir(void* obj, const char* path)
     int msgSize = 0;
     char msg[PKTSIZE];
     memset(msg, 0, PKTSIZE);
-    return exe_cmd(obj, RMD, path, strlen(path) + 1, msg, msgSize);
+    return exe_cmd(obj, RMD, path, strlen(path) + 1, msg, &msgSize);
 }
 
 int tftp_cmd_size(void* obj, const char* path, int* size)
@@ -1241,7 +1247,7 @@ int tftp_cmd_size(void* obj, const char* path, int* size)
     char msg[PKTSIZE];
 
     memset(msg, 0, PKTSIZE);
-    ret = exe_cmd(obj, SIZE, path, strlen(path) + 1, msg, msgSize);
+    ret = exe_cmd(obj, SIZE, path, strlen(path) + 1, msg, &msgSize);
     if (ret == 0)
     {
         size = atoi(msg);
@@ -1265,5 +1271,5 @@ int tftp_cmd_chmod(void* obj, const char* path, const char* mode)
     strcpy(cp, mode);
     cp += strlen(mode);
     *cp++ = '\0';
-    return exe_cmd(obj, CHMOD, cmd, cp - cmd, msg, msgSize);
+    return exe_cmd(obj, CHMOD, cmd, cp - cmd, msg, &msgSize);
 }

@@ -77,6 +77,12 @@ static int ai_fam = AF_INET;
 #define TRIES         6       /* Number of attempts to send each packet */
 #define TIMEOUT_LIMIT ((1 << TRIES) - 1)
 
+enum
+{
+    MESSAGE_TYPE_ERROR,
+    MESSAGE_TYPE_RETURN,
+};
+
 const char* tftpd_progname;
 static int peer;
 static unsigned long timeout    = TIMEOUT; /* Current timeout value */
@@ -115,7 +121,7 @@ static struct rule* rewrite_rules = NULL;
 static int tftp_handle(struct tftphdr*, int);
 static int tftp_file(struct tftphdr* tp, int size);
 static int tftp_cmd(struct tftphdr* tp, int size);
-static void nak(int, const char*);
+static void nak(int, int, const char*);
 static void timer(int);
 static void do_opt(const char*, const char*, char**);
 
@@ -938,6 +944,7 @@ int main(int argc, char** argv)
         set_socket_nonblock(fd, 0);
 #endif
 
+        memset(buf, 0, sizeof(buf));
         n = myrecvfrom(fd, buf, sizeof(buf), 0, &from, &myaddr);
 
         if (n < 0)
@@ -1069,6 +1076,7 @@ int main(int argc, char** argv)
 #endif
 #endif
 
+#if 0
     /* Chroot and drop privileges */
     if (secure)
     {
@@ -1081,6 +1089,8 @@ int main(int argc, char** argv)
         chdir("/"); /* Cygwin chroot() bug workaround */
 #endif
     }
+#endif
+
 #ifdef HAVE_SETREGID
     setrv = setregid(pw->pw_gid, pw->pw_gid);
 #else
@@ -1180,20 +1190,16 @@ int tftp_handle(struct tftphdr* tp, int size)
 
 int tftp_cmd(struct tftphdr* tp, int size)
 {
-    int acksize;
     int retCode;
-    struct tftphdr* ap;
-    char* data;
     char* stuff;
-    ap            = (struct tftphdr*)ackbuf;
-    ap->th_opcode = htons((u_short)RETURN);
-    data          = (char*)&(ap->th_msg);
-    stuff         = (char*)&(tp->th_stuff);
+    stuff             = (char*)&(tp->th_stuff);
+    u_short tp_opcode = ntohs(tp->th_opcode);
 
-    switch (tp->th_opcode)
+    switch (tp_opcode)
     {
     case DELE:
         syslog(LOG_INFO, "DELE: %s", stuff);
+        printf("DELE: %s\n", stuff);
         {
             struct stat st;
             if (stat(stuff, &st) < 0)
@@ -1230,57 +1236,53 @@ int tftp_cmd(struct tftphdr* tp, int size)
 
             if (retCode == -1)
             {
-                ap->th_code = TFTP_FILEFAIL;
-                strcpy(data, strerror(errno));
+                nak(MESSAGE_TYPE_RETURN, TFTP_FILEFAIL, strerror(errno));
             }
             else if (retCode == 0)
             {
-                ap->th_code = TFTP_DELEOK;
-                strcpy(data, "Delete operation successful");
+                nak(MESSAGE_TYPE_RETURN, TFTP_DELEOK, "Delete operation successful");
             }
-            acksize = strlen(data) + 1;
         }
         break;
 
     case CWD:
         syslog(LOG_INFO, "CWD: %s", stuff);
+        printf("CWD: %s\n", stuff);
         //更改用户目录
         if (chdir(stuff) < 0)
         {
-            retCode     = -1;
-            ap->th_code = TFTP_NOPERM;
-            strcpy(data, strerror(errno));
+            retCode = -1;
+            nak(MESSAGE_TYPE_RETURN, TFTP_NOPERM, strerror(errno));
         }
         else
         {
             retCode = 0;
             strcpy(dirs[0], stuff);
-            ap->th_code = TFTP_CWDOK;
-            strcpy(data, "Directory successfully changed.");
+            nak(MESSAGE_TYPE_RETURN, TFTP_CWDOK, "Directory successfully changed.");
         }
-        acksize = strlen(data) + 1;
         break;
 
     case LIST:
         syslog(LOG_INFO, "LIST: %s", stuff);
+        printf("LIST: %s\n", stuff);
         break;
     case MKD:
         syslog(LOG_INFO, "MKD: %s", stuff);
+        printf("MKD: %s\n", stuff);
         // 0777 & umask
         if (mkdir(stuff, 0777) < 0)
         {
-            retCode     = -1;
-            ap->th_code = TFTP_FILEFAIL;
-            strcpy(data, strerror(errno));
+            retCode = -1;
+            nak(MESSAGE_TYPE_RETURN, TFTP_FILEFAIL, strerror(errno));
         }
         else
         {
-            retCode     = 0;
-            ap->th_code = TFTP_MKDIROK;
+            retCode = 0;
+            char path[MAXPATHLEN];
             /*判断是否绝对路径*/
             if (stuff[0] == '/')
             {
-                sprintf(data, "\"%s\" created", stuff);
+                sprintf(path, "\"%s\" created", stuff);
             }
             else
             {
@@ -1289,100 +1291,94 @@ int tftp_cmd(struct tftphdr* tp, int size)
 
                 if (dir[strlen(dir) - 1] == '/')
                 {
-                    sprintf(data, "\"%s%s\" created", dir, stuff);
+                    sprintf(path, "\"%s%s\" created", dir, stuff);
                 }
                 else
                 {
-                    sprintf(data, "\"%s/%s\" created", dir, stuff);
+                    sprintf(path, "\"%s/%s\" created", dir, stuff);
                 }
             }
+            nak(MESSAGE_TYPE_RETURN, TFTP_MKDIROK, path);
         }
-        acksize = strlen(data) + 1;
         break;
     case RMD:
         syslog(LOG_INFO, "RMD: %s", stuff);
+        printf("RMD: %s\n", stuff);
         if (rmdir(stuff) < 0)
         {
-            retCode     = -1;
-            ap->th_code = TFTP_FILEFAIL;
-            strcpy(data, strerror(errno));
+            retCode = -1;
+            nak(MESSAGE_TYPE_RETURN, TFTP_FILEFAIL, strerror(errno));
         }
         else
         {
-            retCode     = 0;
-            ap->th_code = TFTP_RMDIROK;
-            strcpy(data, "Remove directory operation successful.");
+            retCode = 0;
+            nak(MESSAGE_TYPE_RETURN, TFTP_RMDIROK, "Remove directory operation successful.");
         }
-        acksize = strlen(data) + 1;
         break;
     case PWD:
         syslog(LOG_INFO, "PWD: %s", stuff);
+        printf("PWD: %s\n", stuff);
         {
             char path[MAXPATHLEN];
-
             if (getcwd(path, sizeof path) == (char*)NULL)
             {
-                retCode     = -1;
-                ap->th_code = TFTP_FILEFAIL;
-                strcpy(data, strerror(errno));
+                retCode = -1;
+                nak(MESSAGE_TYPE_RETURN, TFTP_FILEFAIL, strerror(errno));
             }
             else
             {
-                retCode     = 0;
-                ap->th_code = TFTP_PWDOK;
-                strcpy(data, path);
+                retCode = 0;
+                nak(MESSAGE_TYPE_RETURN, TFTP_PWDOK, path);
             }
-            acksize = strlen(data) + 1;
         }
         break;
     case CDUP:
         syslog(LOG_INFO, "CDUP: %s", stuff);
+        printf("CDUP: %s\n", stuff);
         //更改用户目录
         if (chdir("..") < 0)
         {
-            retCode     = -1;
-            ap->th_code = TFTP_NOPERM;
-            strcpy(data, strerror(errno));
+            retCode = -1;
+            nak(MESSAGE_TYPE_RETURN, TFTP_NOPERM, strerror(errno));
         }
         else
         {
-            retCode     = 0;
-            ap->th_code = TFTP_CWDOK;
-            strcpy(data, "Directory successfully changed.");
+            retCode = 0;
+            nak(MESSAGE_TYPE_RETURN, TFTP_CWDOK, "Directory successfully changed.");
         }
-        acksize = strlen(data) + 1;
         break;
     case SIZE:
         syslog(LOG_INFO, "SIZE: %s", stuff);
+        printf("SIZE: %s\n", stuff);
         {
             struct stat stbuf;
             if (stat(stuff, &stbuf) < 0)
             {
-                retCode     = -1;
-                ap->th_code = TFTP_NOPERM;
-                strcpy(data, strerror(errno));
+                retCode = -1;
+                nak(MESSAGE_TYPE_RETURN, TFTP_NOPERM, strerror(errno));
             }
             else
             {
+                char data[1024];
                 /*如果不是普通文件则返回错误*/
                 if (!S_ISREG(stbuf.st_mode))
                 {
-                    retCode     = -1;
-                    ap->th_code = TFTP_NOPERM;
+                    retCode = -1;
                     sprintf(data, "%s is not a plain file.", stuff);
+                    nak(MESSAGE_TYPE_RETURN, TFTP_NOPERM, data);
                 }
                 else
                 {
-                    retCode     = 0;
-                    ap->th_code = TFTP_SIZEOK;
+                    retCode = 0;
                     sprintf(data, "%ld", stbuf.st_size);
+                    nak(MESSAGE_TYPE_RETURN, TFTP_SIZEOK, data);
                 }
             }
-            acksize = strlen(data) + 1;
         }
         break;
     case CHMOD:
         syslog(LOG_INFO, "CHMOD: %s", stuff);
+        printf("CHMOD: %s\n", stuff);
         {
             char* tmp             = stuff;
             char mode[32]         = { 0 };
@@ -1393,17 +1389,14 @@ int tftp_cmd(struct tftphdr* tp, int size)
 
             if (chmod(path, mode) < 0)
             {
-                retCode     = -1;
-                ap->th_code = TFTP_NOPERM;
-                strcpy(data, strerror(errno));
+                retCode = -1;
+                nak(MESSAGE_TYPE_RETURN, TFTP_NOPERM, strerror(errno));
             }
             else
             {
-                retCode     = 0;
-                ap->th_code = TFTP_CHMODOK;
-                strcpy(data, "Permissions successfully changed.");
+                retCode = 0;
+                nak(MESSAGE_TYPE_RETURN, TFTP_CHMODOK, "Permissions successfully changed.");
             }
-            acksize = strlen(data) + 1;
         }
         break;
 
@@ -1411,12 +1404,6 @@ int tftp_cmd(struct tftphdr* tp, int size)
         break;
     }
 
-    acksize += 4; // 4 for header length
-    if (send(peer, ackbuf, acksize, 0) != acksize)
-    {
-        syslog(LOG_WARNING, "tftpd: write(return): %m");
-        return -1;
-    }
     return retCode;
 }
 
@@ -1449,7 +1436,7 @@ int tftp_file(struct tftphdr* tp, int size)
 
         if (*cp)
         {
-            nak(EBADOP, "Request not null-terminated");
+            nak(MESSAGE_TYPE_ERROR, EBADOP, "Request not null-terminated");
             exit(0);
         }
 
@@ -1469,12 +1456,12 @@ int tftp_file(struct tftphdr* tp, int size)
             }
             if (!pf->f_mode)
             {
-                nak(EBADOP, "Unknown mode");
+                nak(MESSAGE_TYPE_ERROR, EBADOP, "Unknown mode");
                 exit(0);
             }
             if (!(filename = (*pf->f_rewrite)(origfilename, tp_opcode, from.sa.sa_family, &errmsgptr)))
             {
-                nak(EACCESS, errmsgptr); /* File denied by mapping rule */
+                nak(MESSAGE_TYPE_ERROR, EACCESS, errmsgptr); /* File denied by mapping rule */
                 exit(0);
             }
             if (verbosity >= 1)
@@ -1494,7 +1481,7 @@ int tftp_file(struct tftphdr* tp, int size)
             ecode = (*pf->f_validate)(filename, tp_opcode, pf, &errmsgptr);
             if (ecode)
             {
-                nak(ecode, errmsgptr);
+                nak(MESSAGE_TYPE_ERROR, ecode, errmsgptr);
                 exit(0);
             }
             opt = ++cp;
@@ -1512,7 +1499,7 @@ int tftp_file(struct tftphdr* tp, int size)
 
     if (!pf)
     {
-        nak(EBADOP, "Missing mode");
+        nak(MESSAGE_TYPE_ERROR, EBADOP, "Missing mode");
         exit(0);
     }
 
@@ -1691,7 +1678,7 @@ static void do_opt(const char* opt, const char* val, char** ap)
 
                 if (p + optlen + retlen + 2 >= ackbuf + sizeof(ackbuf))
                 {
-                    nak(EOPTNEG, "Insufficient space for options");
+                    nak(MESSAGE_TYPE_ERROR, EOPTNEG, "Insufficient space for options");
                     exit(0);
                 }
 
@@ -1702,7 +1689,7 @@ static void do_opt(const char* opt, const char* val, char** ap)
             }
             else
             {
-                nak(EOPTNEG, "Unsupported option(s) requested");
+                nak(MESSAGE_TYPE_ERROR, EOPTNEG, "Unsupported option(s) requested");
                 exit(0);
             }
             break;
@@ -1984,7 +1971,7 @@ static void tftp_sendfile(const struct formats* pf, struct tftphdr* oap, int oac
         size = readit(file, &dp, pf->f_convert);
         if (size < 0)
         {
-            nak(errno + 100, NULL);
+            nak(MESSAGE_TYPE_ERROR, errno + 100, NULL);
             goto abort;
         }
         dp->th_opcode = htons((u_short)DATA);
@@ -2111,9 +2098,9 @@ static void tftp_recvfile(const struct formats* pf, struct tftphdr* oap, int oac
         if (size != (n - 4))
         { /* ahem */
             if (size < 0)
-                nak(errno + 100, NULL);
+                nak(MESSAGE_TYPE_ERROR, errno + 100, NULL);
             else
-                nak(ENOSPACE, NULL);
+                nak(MESSAGE_TYPE_ERROR, ENOSPACE, NULL);
             goto abort;
         }
     } while (size == segsize);
@@ -2158,28 +2145,34 @@ static const char* const errmsgs[] = {
  * standard TFTP codes, or a UNIX errno
  * offset by 100.
  */
-static void nak(int error, const char* msg)
+static void nak(int type, int error, const char* msg)
 {
     struct tftphdr* tp;
     int length;
 
-    tp            = (struct tftphdr*)buf;
-    tp->th_opcode = htons((u_short)ERROR);
-
-    if (error >= 100)
+    tp = (struct tftphdr*)buf;
+    if (type == MESSAGE_TYPE_ERROR)
     {
-        /* This is a Unix errno+100 */
-        if (!msg)
-            msg = strerror(error - 100);
-        error = EUNDEF;
-    }
-    else
-    {
-        if ((unsigned)error >= ERR_CNT)
+        tp->th_opcode = htons((u_short)ERROR);
+        if (error >= 100)
+        {
+            /* This is a Unix errno+100 */
+            if (!msg)
+                msg = strerror(error - 100);
             error = EUNDEF;
+        }
+        else
+        {
+            if ((unsigned)error >= ERR_CNT)
+                error = EUNDEF;
 
-        if (!msg)
-            msg = errmsgs[error];
+            if (!msg)
+                msg = errmsgs[error];
+        }
+    }
+    else if (type == MESSAGE_TYPE_RETURN)
+    {
+        tp->th_opcode = htons((u_short)RETURN);
     }
 
     tp->th_code = htons((u_short)error);
