@@ -72,7 +72,6 @@ char cmdbuf[PKTSIZE];
 int g_timeout;
 int g_rexmtval;
 int g_maxtimeout;
-sigjmp_buf g_toplevel;
 sigjmp_buf g_timeoutbuf;
 
 struct tftpObj
@@ -287,8 +286,6 @@ static void timer(int sig)
     if (g_timeout >= g_maxtimeout)
     {
         printf("Transfer timed out.\n");
-        errno = save_errno;
-        siglongjmp(g_toplevel, -1);
     }
     errno = save_errno;
     siglongjmp(g_timeoutbuf, 1);
@@ -524,9 +521,14 @@ int send_cmd_reply(struct tftpObj* obj, char* send, int sendLen, char* reply, in
     ap        = (struct tftphdr*)reply;
     g_timeout = 0;
     (void)sigsetjmp(g_timeoutbuf, 1);
+    if (g_timeout >= g_maxtimeout)
+    {
+        return -1;
+    }
+
     if (sendto(obj->socket, send, sendLen, 0, &obj->peeraddr.sa, SOCKLEN(&obj->peeraddr)) != sendLen)
     {
-        printf("tftp:sendto [cd] error\n");
+        printf("tftp:sendto error\n");
         return -1;
     }
 
@@ -696,6 +698,11 @@ int tftp_cmd_put(void* obj, const char* local, const char* remote, int* localsiz
         }
         g_timeout = 0;
         (void)sigsetjmp(g_timeoutbuf, 1);
+        if (g_timeout >= g_maxtimeout)
+        {
+            ret = -1;
+            goto abort;
+        }
 
         if (tftp->trace)
             tpacket("sent", dp, size + 4);
@@ -878,6 +885,14 @@ int tftp_cmd_get(void* obj, const char* local, const char* remote, int* remotesi
         }
         g_timeout = 0;
         (void)sigsetjmp(g_timeoutbuf, 1);
+        if (g_timeout >= g_maxtimeout)
+        {
+            fclose(file);
+            stopclock();
+            if (amount > 0 && tftp->verbose)
+                printstats("Received", amount);
+            return -1;
+        }
     send_ack:
         if (tftp->trace)
             tpacket("sent", ap, size);
@@ -1140,6 +1155,12 @@ int tftp_cmd_ls(void* obj, char* buf)
         }
         g_timeout = 0;
         (void)sigsetjmp(g_timeoutbuf, 1);
+        if (g_timeout >= g_maxtimeout)
+        {
+            stopclock();
+            return -1;
+        }
+
     send_ack:
         if (tftp->trace)
             tpacket("sent", ap, size);
