@@ -24,7 +24,7 @@ void* thread(void* arg)
 
 int main()
 {
-    void* obj = tftp_create("192.168.20.34", 69, "192.168.18.145", -1);
+    void* obj = tftp_create("192.168.20.176", 69, "192.168.18.145", -1);
     if (obj)
     {
         tftp_set_verbose(obj, 1);
