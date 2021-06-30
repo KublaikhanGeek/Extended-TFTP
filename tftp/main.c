@@ -91,22 +91,6 @@ void settrace(int, char**);
 void setverbose(int, char**);
 void status(int, char**);
 void setliteral(int, char**);
-void do_cd(int, char**);
-void do_cdup(int, char**);
-void do_lcd(int, char**);
-void do_pwd(int, char**);
-void do_delete(int, char**);
-void do_mdelete(int, char**);
-void do_rename(int, char**);
-void do_ls(int, char**);
-void do_dir(int, char**);
-void do_mkdir(int, char**);
-void do_rmdir(int, char**);
-void do_mget(int, char**);
-void do_mput(int, char**);
-void do_size(int, char**);
-void do_chmod(int, char**);
-void do_md5(int, char**);
 
 static void command(void);
 static void getusage(char*);
@@ -137,6 +121,7 @@ struct cmd cmdtab[] = { { "connect", "connect to remote tftp", setpeer },
                         { "timeout", "set total retransmission timeout", settimeout },
                         { "?", "print help information", help },
                         { "help", "print help information", help },
+                        /*
                         { "cd", "change working directory", do_cd },
                         { "cdup", "change to parent directory", do_cdup },
                         { "lcd", "change working directory on the local machine", do_lcd },
@@ -159,6 +144,7 @@ struct cmd cmdtab[] = { { "connect", "connect to remote tftp", setpeer },
                         { "size", "return the size of a file", do_size },
                         { "chmod", "changes the permissions of each given file according to mode", do_chmod },
                         { "md5", "return the md5 value of a file", do_md5 },
+                        */
                         { 0, 0, 0 } };
 
 struct cmd* getcmd(char*);
@@ -176,14 +162,12 @@ static void usage(int errcode)
 
 int main(int argc, char* argv[])
 {
-    union sock_addr sa;
     int arg;
     static int pargc, peerargc;
     static int iscmd = 0;
     char** pargv;
     const char* optx;
     char* peerargv[3];
-    int ret = 0;
 
     program = argv[0];
 
@@ -458,7 +442,6 @@ void setascii(int argc, char* argv[])
  */
 void put(int argc, char* argv[])
 {
-    int fd;
     int n, err;
     char *cp, *targ;
     char tmp[INET6_ADDRSTRLEN], *tp;
@@ -544,7 +527,6 @@ static void putusage(char* s)
  */
 void get(int argc, char* argv[])
 {
-    int fd;
     int n;
     char* cp;
     char* src;
@@ -605,13 +587,13 @@ void get(int argc, char* argv[])
             cp = argc == 3 ? argv[2] : tail(src);
             if (verbose)
                 printf("getting from %s:%s to %s [%s]\n", hostname, src, cp, mode);
-            tftp_cmd_get(tftp, cp, src, filesize, transfersize);
+            tftp_cmd_get(tftp, cp, src, &filesize, &transfersize);
             break;
         }
         cp = tail(src); /* new .. jdg */
         if (verbose)
             printf("getting from %s:%s to %s [%s]\n", hostname, src, cp, mode);
-        tftp_cmd_get(tftp, cp, src, filesize, transfersize);
+        tftp_cmd_get(tftp, cp, src, &filesize, &transfersize);
     }
 }
 
@@ -898,53 +880,4 @@ void setverbose(int argc, char* argv[])
     verbose = !verbose;
     tftp_set_verbose(tftp, verbose);
     printf("Verbose mode %s.\n", verbose ? "on" : "off");
-}
-
-void do_cd(int argc, char* argv[])
-{
-}
-void do_cdup(int argc, char* argv[])
-{
-}
-void do_lcd(int argc, char* argv[])
-{
-}
-void do_pwd(int argc, char* argv[])
-{
-}
-void do_delete(int argc, char* argv[])
-{
-}
-void do_mdelete(int argc, char* argv[])
-{
-}
-void do_rename(int argc, char* argv[])
-{
-}
-void do_ls(int argc, char* argv[])
-{
-}
-void do_dir(int argc, char* argv[])
-{
-}
-void do_mkdir(int argc, char* argv[])
-{
-}
-void do_rmdir(int argc, char* argv[])
-{
-}
-void do_mget(int argc, char* argv[])
-{
-}
-void do_mput(int argc, char* argv[])
-{
-}
-void do_size(int argc, char* argv[])
-{
-}
-void do_chmod(int argc, char* argv[])
-{
-}
-void do_md5(int argc, char* argv[])
-{
 }

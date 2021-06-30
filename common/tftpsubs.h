@@ -111,6 +111,10 @@ int getlocalip(char* ip);
 int get_peer_addr(int sockfd, char* ip, int* port);
 int get_socket_addr(int sockfd, char* ip, int* port);
 
+/*获取权限位信息*/
+const char* statbuf_get_perms(struct stat* sbuf);
+const char* statbuf_get_date(struct stat* sbuf);
+
 extern int segsize;
 #define MAX_SEGSIZE 65464
 

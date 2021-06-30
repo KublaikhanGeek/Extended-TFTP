@@ -21,6 +21,6 @@ void set_signal(int, void (*)(int), int);
 void* tfmalloc(size_t);
 char* tfstrdup(const char*);
 
-extern int verbosity;
+extern int g_verbosity;
 
 #endif

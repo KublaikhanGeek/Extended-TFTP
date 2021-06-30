@@ -69,11 +69,11 @@ static const struct modes modes[]
 #define PKTSIZE   SEGSIZE + 4
 char ackbuf[PKTSIZE];
 char cmdbuf[PKTSIZE];
-int timeout;
-int rexmtval;
-int maxtimeout;
-sigjmp_buf toplevel;
-sigjmp_buf timeoutbuf;
+int g_timeout;
+int g_rexmtval;
+int g_maxtimeout;
+sigjmp_buf g_toplevel;
+sigjmp_buf g_timeoutbuf;
 
 struct tftpObj
 {
@@ -230,7 +230,7 @@ static void tpacket(const char* s, struct tftphdr* tp, int n)
         break;
 
     case OACK:
-        printf("\n", ntohs(tp->th_block));
+        printf("\n");
         break;
 
     case ERROR:
@@ -283,15 +283,15 @@ static void timer(int sig)
 
     (void)sig; /* Shut up unused warning */
 
-    timeout += rexmtval;
-    if (timeout >= maxtimeout)
+    g_timeout += g_rexmtval;
+    if (g_timeout >= g_maxtimeout)
     {
         printf("Transfer timed out.\n");
         errno = save_errno;
-        siglongjmp(toplevel, -1);
+        siglongjmp(g_toplevel, -1);
     }
     errno = save_errno;
-    siglongjmp(timeoutbuf, 1);
+    siglongjmp(g_timeoutbuf, 1);
 }
 
 // obj
@@ -306,14 +306,14 @@ void* tftp_create(const char* serverip, int port, const char* localip, int local
     }
 
     obj->mode  = MODE_DEFAULT;
-    obj->rexmt = rexmtval = TIMEOUT;
-    obj->timeout = maxtimeout = 5 * TIMEOUT;
-    obj->blocksize            = 0;
-    obj->trace                = 0;
-    obj->verbose              = 0;
-    obj->connected            = 0;
-    obj->literal              = 0;
-    obj->socket               = socket(AF_INET, SOCK_DGRAM, 0);
+    obj->rexmt = g_rexmtval = TIMEOUT;
+    obj->timeout = g_maxtimeout = 5 * TIMEOUT;
+    obj->blocksize              = 0;
+    obj->trace                  = 0;
+    obj->verbose                = 0;
+    obj->connected              = 0;
+    obj->literal                = 0;
+    obj->socket                 = socket(AF_INET, SOCK_DGRAM, 0);
     if (obj->socket < 0)
     {
         printf("Failed to create socket \n");
@@ -466,13 +466,13 @@ int tftp_set_literal(void* obj, int onoff)
 int tftp_set_rexmt(void* obj, int rexmt)
 {
     struct tftpObj* tftp;
-    if (!obj)
+    if (!obj || rexmt < 0)
     {
         return -1;
     }
 
     tftp        = (struct tftpObj*)obj;
-    tftp->rexmt = rexmtval = rexmt;
+    tftp->rexmt = g_rexmtval = rexmt;
 
     return 0;
 }
@@ -480,13 +480,13 @@ int tftp_set_rexmt(void* obj, int rexmt)
 int tftp_set_timeout(void* obj, int timeout)
 {
     struct tftpObj* tftp;
-    if (!obj)
+    if (!obj || timeout < 0)
     {
         return -1;
     }
 
     tftp          = (struct tftpObj*)obj;
-    tftp->timeout = maxtimeout = timeout;
+    tftp->timeout = g_maxtimeout = timeout;
 
     return 0;
 }
@@ -495,6 +495,11 @@ int tftp_set_blocksize(void* obj, int blocksize)
 {
     struct tftpObj* tftp;
     if (!obj)
+    {
+        return -1;
+    }
+
+    if (blocksize < 0 || blocksize > MAX_SEGSIZE)
     {
         return -1;
     }
@@ -516,9 +521,9 @@ int send_cmd_reply(struct tftpObj* obj, char* send, int sendLen, char* reply, in
         return -1;
     }
 
-    ap      = (struct tftphdr*)reply;
-    timeout = 0;
-    (void)sigsetjmp(timeoutbuf, 1);
+    ap        = (struct tftphdr*)reply;
+    g_timeout = 0;
+    (void)sigsetjmp(g_timeoutbuf, 1);
     if (sendto(obj->socket, send, sendLen, 0, &obj->peeraddr.sa, SOCKLEN(&obj->peeraddr)) != sendLen)
     {
         printf("tftp:sendto [cd] error\n");
@@ -565,7 +570,6 @@ int exe_cmd(void* obj, u_short opcode, const char* cmd, int cmdSize, char* msg, 
     struct tftpObj* tftp;
     int size      = 0;
     int ret       = 0;
-    int callRet   = 0;
     int n         = 0;
     int ap_opcode = 0;
     int ap_code   = 0;
@@ -631,9 +635,14 @@ int tftp_cmd_put(void* obj, const char* local, const char* remote, int* localsiz
     FILE* file;
     u_short ap_opcode, ap_block;
     struct tftpObj* tftp;
-    int ret = 0;
+    volatile int ret = 0;
     union sock_addr peeraddr;
-    int tsize = 0;
+    volatile int tsize = 0;
+
+    if (!obj || !local || !remote || !localsize || !transfersize)
+    {
+        return -1;
+    }
 
     startclock(); /* start stat's clock */
     tftp       = (struct tftpObj*)obj;
@@ -685,8 +694,8 @@ int tftp_cmd_put(void* obj, const char* local, const char* remote, int* localsiz
             dp->th_opcode = htons((u_short)DATA);
             dp->th_block  = htons((u_short)block);
         }
-        timeout = 0;
-        (void)sigsetjmp(timeoutbuf, 1);
+        g_timeout = 0;
+        (void)sigsetjmp(g_timeoutbuf, 1);
 
         if (tftp->trace)
             tpacket("sent", dp, size + 4);
@@ -821,9 +830,14 @@ int tftp_cmd_get(void* obj, const char* local, const char* remote, int* remotesi
     volatile int convert; /* true if converting crlf -> lf */
     u_short dp_opcode, dp_block;
     struct tftpObj* tftp;
-    int ret   = 0;
-    int tsize = 0;
+    volatile int ret   = 0;
+    volatile int tsize = 0;
     union sock_addr peeraddr;
+
+    if (!obj || !local || !remote || !remotesize || !transfersize)
+    {
+        return -1;
+    }
 
     startclock();
     tftp      = (struct tftpObj*)obj;
@@ -862,8 +876,8 @@ int tftp_cmd_get(void* obj, const char* local, const char* remote, int* remotesi
             size          = 4;
             block++;
         }
-        timeout = 0;
-        (void)sigsetjmp(timeoutbuf, 1);
+        g_timeout = 0;
+        (void)sigsetjmp(g_timeoutbuf, 1);
     send_ack:
         if (tftp->trace)
             tpacket("sent", ap, size);
@@ -1000,8 +1014,12 @@ int tftp_cmd_cd(void* obj, const char* path)
 {
     int msgSize = 0;
     char msg[PKTSIZE];
-    memset(msg, 0, PKTSIZE);
+    if (!obj || !path)
+    {
+        return -1;
+    }
 
+    memset(msg, 0, PKTSIZE);
     printf("cd path: %s\n", path);
     return exe_cmd(obj, CWD, path, strlen(path) + 1, msg, &msgSize);
 }
@@ -1011,6 +1029,10 @@ int tftp_cmd_cdup(void* obj)
     int msgSize = 0;
     char path[8];
     char msg[PKTSIZE];
+    if (!obj)
+    {
+        return -1;
+    }
     strcpy(path, "..");
     memset(msg, 0, PKTSIZE);
     return exe_cmd(obj, CDUP, path, strlen(path) + 1, msg, &msgSize);
@@ -1018,12 +1040,20 @@ int tftp_cmd_cdup(void* obj)
 
 int tftp_cmd_lcd(void* obj, const char* path)
 {
+    if (!obj || !path)
+    {
+        return -1;
+    }
     return 0;
 }
 
 int tftp_cmd_pwd(void* obj, char* pwd)
 {
     int msgSize = 0;
+    if (!obj || !pwd)
+    {
+        return -1;
+    }
     return exe_cmd(obj, PWD, NULL, 0, pwd, &msgSize);
 }
 
@@ -1031,32 +1061,37 @@ int tftp_cmd_delete(void* obj, const char* path)
 {
     int msgSize = 0;
     char msg[PKTSIZE];
+    if (!obj || !path)
+    {
+        return -1;
+    }
     memset(msg, 0, PKTSIZE);
     return exe_cmd(obj, DELE, path, strlen(path) + 1, msg, &msgSize);
 }
 
-int tftp_cmd_rename(void* obj, const char* src, const char* dst)
-{
-    char* cp;
-    char cmd[PKTSIZE];
-    char msg[PKTSIZE];
-    int msgSize = 0;
-    memset(cmd, 0, PKTSIZE);
+// int tftp_cmd_rename(void* obj, const char* src, const char* dst)
+//{
+//    char* cp;
+//    char cmd[PKTSIZE];
+//    char msg[PKTSIZE];
+//    int msgSize = 0;
+//    memset(cmd, 0, PKTSIZE);
+//
+//    cp = cmd;
+//    strcpy(cp, src);
+//    cp += strlen(src);
+//    *cp++ = '\0';
+//    strcpy(cp, dst);
+//    cp += strlen(dst);
+//    *cp++ = '\0';
+//    return exe_cmd(obj, CHMOD, cmd, cp - cmd, msg, &msgSize);
+//}
 
-    cp = cmd;
-    strcpy(cp, src);
-    cp += strlen(src);
-    *cp++ = '\0';
-    strcpy(cp, dst);
-    cp += strlen(dst);
-    *cp++ = '\0';
-    return exe_cmd(obj, CHMOD, cmd, cp - cmd, msg, &msgSize);
-}
-
-int tftp_cmd_ls(void* obj, const char* path, char* buf)
+int tftp_cmd_ls(void* obj, char* buf)
 {
     struct tftphdr* ap;
     struct tftphdr* dp;
+    struct tftpObj* tftp;
     int n;
     volatile u_short block;
     volatile int size, firsttrip;
@@ -1064,25 +1099,28 @@ int tftp_cmd_ls(void* obj, const char* path, char* buf)
     union sock_addr from;
     socklen_t fromlen;
     u_short dp_opcode, dp_block;
-    struct tftpObj* tftp;
-    int ret = 0;
+    volatile int ret = TFTP_LSOK;
     union sock_addr peeraddr;
-    char* stuff;
-    char* rwBuf;
-    int tsize;
+    char* listBuf;
+    if (!obj || !buf)
+    {
+        return -1;
+    }
 
     startclock();
     tftp      = (struct tftpObj*)obj;
     ap        = (struct tftphdr*)ackbuf;
     dp        = (struct tftphdr*)cmdbuf;
-    stuff     = (char*)&(ap->th_stuff);
     block     = 1;
     firsttrip = 1;
     amount    = 0;
-    rwBuf     = buf;
+    listBuf   = buf;
 
     CHECK_CONNECTED(tftp->connected);
     memcpy(&peeraddr, &tftp->peeraddr, sizeof(union sock_addr));
+
+    memset(cmdbuf, 0, sizeof(cmdbuf));
+    memset(ackbuf, 0, sizeof(ackbuf));
 
     bsd_signal(SIGALRM, timer);
     do
@@ -1090,9 +1128,8 @@ int tftp_cmd_ls(void* obj, const char* path, char* buf)
         if (firsttrip)
         {
             ap->th_opcode = htons(LIST);
-            strcpy(stuff, path);
-            size      = sizeof(ap->th_opcode) + strlen(path) + 1;
-            firsttrip = 0;
+            size          = sizeof(ap->th_opcode);
+            firsttrip     = 0;
         }
         else
         {
@@ -1101,8 +1138,8 @@ int tftp_cmd_ls(void* obj, const char* path, char* buf)
             size          = 4;
             block++;
         }
-        timeout = 0;
-        (void)sigsetjmp(timeoutbuf, 1);
+        g_timeout = 0;
+        (void)sigsetjmp(g_timeoutbuf, 1);
     send_ack:
         if (tftp->trace)
             tpacket("sent", ap, size);
@@ -1140,47 +1177,6 @@ int tftp_cmd_ls(void* obj, const char* path, char* buf)
                 ret = -1;
                 goto abort;
             }
-            if (dp_opcode == OACK)
-            {
-                int argn  = 0;
-                char* tmp = dp->th_data;
-                char* end = (char*)dp + n;
-                char* val;
-                char* opt = tmp;
-
-                while (tmp < end && *tmp)
-                {
-                    do
-                    {
-                        tmp++;
-                    } while (tmp < end && *tmp);
-
-                    if (*tmp)
-                    {
-                        break;
-                    }
-                    argn++;
-
-                    if (argn & 1)
-                    {
-                        val = ++tmp;
-                        if (!strcmp(opt, "blksize"))
-                        {
-                            tftp->blocksize = atoi(val);
-                            segsize         = tftp->blocksize;
-                        }
-                        else if (!strcmp(opt, "tsize"))
-                        {
-                            tsize = atoi(val);
-                        }
-                    }
-                    else
-                    {
-                        opt = ++tmp;
-                    }
-                }
-                break;
-            }
             if (dp_opcode == DATA)
             {
                 int j;
@@ -1204,8 +1200,9 @@ int tftp_cmd_ls(void* obj, const char* path, char* buf)
             }
         }
 
-        memcpy(rwBuf, dp->th_data, n - 4);
-        rwBuf += (n - 4);
+        size = n - 4;
+        memcpy(listBuf, dp->th_data, size);
+        listBuf += size;
         amount += size;
     } while (size == segsize);
 abort:                                   /* ok to ack, since user */
@@ -1219,15 +1216,23 @@ abort:                                   /* ok to ack, since user */
     return ret;
 }
 
-int tftp_cmd_dir(void* obj, const char* path, char* buf)
+int tftp_cmd_dir(void* obj, char* buf)
 {
-    return tftp_cmd_ls(obj, path, buf);
+    if (!obj || !buf)
+    {
+        return -1;
+    }
+    return tftp_cmd_ls(obj, buf);
 }
 
 int tftp_cmd_mkdir(void* obj, const char* path)
 {
     int msgSize = 0;
     char msg[PKTSIZE];
+    if (!obj || !path)
+    {
+        return -1;
+    }
     memset(msg, 0, PKTSIZE);
     return exe_cmd(obj, MKD, path, strlen(path) + 1, msg, &msgSize);
 }
@@ -1236,6 +1241,10 @@ int tftp_cmd_rmdir(void* obj, const char* path)
 {
     int msgSize = 0;
     char msg[PKTSIZE];
+    if (!obj || !path)
+    {
+        return -1;
+    }
     memset(msg, 0, PKTSIZE);
     return exe_cmd(obj, RMD, path, strlen(path) + 1, msg, &msgSize);
 }
@@ -1245,12 +1254,16 @@ int tftp_cmd_size(void* obj, const char* path, int* size)
     int ret     = 0;
     int msgSize = 0;
     char msg[PKTSIZE];
+    if (!obj || !path || !size)
+    {
+        return -1;
+    }
 
     memset(msg, 0, PKTSIZE);
     ret = exe_cmd(obj, SIZE, path, strlen(path) + 1, msg, &msgSize);
-    if (ret == 0)
+    if (ret == TFTP_SIZEOK)
     {
-        size = atoi(msg);
+        *size = atoi(msg);
     }
 
     return ret;
@@ -1262,6 +1275,10 @@ int tftp_cmd_chmod(void* obj, const char* path, const char* mode)
     char cmd[PKTSIZE];
     char msg[PKTSIZE];
     int msgSize = 0;
+    if (!obj || !path || !mode)
+    {
+        return -1;
+    }
     memset(cmd, 0, PKTSIZE);
 
     cp = cmd;

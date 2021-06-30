@@ -308,18 +308,16 @@ typedef int socklen_t;
 #define CHMOD  16
 #define RETURN 17
 
-#define TFTP_NOOPOK   200
-#define TFTP_CHMODOK  200
-#define TFTP_SIZEOK   213
-#define TFTP_MD5OK    213
-#define TFTP_CWDOK    250
-#define TFTP_CDUPOK   250
-#define TFTP_RMDIROK  250
-#define TFTP_DELEOK   250
-#define TFTP_RENAMEOK 250
-#define TFTP_RENAMEOK 250
-#define TFTP_PWDOK    257
-#define TFTP_MKDIROK  257
+#define TFTP_NOOPOK  200
+#define TFTP_LSOK    200
+#define TFTP_CHMODOK 200
+#define TFTP_SIZEOK  213
+#define TFTP_CWDOK   250
+#define TFTP_CDUPOK  250
+#define TFTP_RMDIROK 250
+#define TFTP_DELEOK  250
+#define TFTP_PWDOK   257
+#define TFTP_MKDIROK 257
 
 #define TFTP_BADCMD         500
 #define TFTP_BADOPTS        501

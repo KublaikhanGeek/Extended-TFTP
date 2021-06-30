@@ -35,7 +35,9 @@ int main()
         tftp_cmd_put(obj, "test.txt", "test.txt", &filesize, &transfersize);
 
         tftp_cmd_get(obj, "test.txt", "test.txt", &filesize, &transfersize);
+#endif
 
+#if 0
         tftp_set_blocksize(obj, 1024);
         tftp_set_mode(obj, "netascii");
         tftp_cmd_put(obj, "test.txt", "test.txt", &filesize, &transfersize);
@@ -43,7 +45,8 @@ int main()
         tftp_cmd_get(obj, "test.txt", "test.txt", &filesize, &transfersize);
 #endif
 
-        char path[1024];
+#if 1
+        char path[4096];
         int size;
 
         printf("------------------\n");
@@ -64,11 +67,11 @@ int main()
             printf("删除文件成功\n");
         }
 
-        printf("+++++++++++++++++++\n");
-        if (TFTP_RENAMEOK == tftp_cmd_rename(obj, "yu", "yu.bak"))
-        {
-            printf("重命名文件成功\n");
-        }
+        // printf("+++++++++++++++++++\n");
+        // if (TFTP_RENAMEOK == tftp_cmd_rename(obj, "yu", "yu.bak"))
+        //{
+        //    printf("重命名文件成功\n");
+        //}
 
         printf("------------------\n");
         if (TFTP_SIZEOK == tftp_cmd_size(obj, "system.tar.gz", &size))
@@ -100,14 +103,26 @@ int main()
             printf("切到上级目录成功\n");
         }
 
+        printf("------------------\n");
+        if (TFTP_CWDOK == tftp_cmd_cd(obj, "/home/nvidia/upgrade"))
+        {
+            printf("切换路径成功\n");
+        }
+
         printf("+++++++++++++++++++\n");
         if (TFTP_PWDOK == tftp_cmd_pwd(obj, path))
         {
             printf("当前路径：%s\n", path);
         }
 
-        printf("------------------\n");
+        printf("+++++++++++++++++++\n");
+        if (TFTP_LSOK == tftp_cmd_ls(obj, path))
+        {
+            printf("ls：\r\n%s\n", path);
+        }
 
+        printf("------------------\n");
+#endif
         pthread_t th;
         int ret;
         ret = pthread_create(&th, NULL, thread, NULL);
