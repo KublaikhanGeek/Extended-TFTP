@@ -40,8 +40,7 @@
 
 #include "config.h"
 
-union sock_addr
-{
+union sock_addr {
     struct sockaddr sa;
     struct sockaddr_in si;
 #ifdef HAVE_IPV6
@@ -108,9 +107,16 @@ struct tftphdr* w_init(void);
 int write_behind(FILE*, int);
 int writeit(FILE*, struct tftphdr**, int, int);
 
+int getlocalip(char* ip);
+int get_peer_addr(int sockfd, char* ip, int* port);
+int get_socket_addr(int sockfd, char* ip, int* port);
+
+/*获取权限位信息*/
+const char* statbuf_get_perms(struct stat* sbuf);
+const char* statbuf_get_date(struct stat* sbuf);
+
 extern int segsize;
 #define MAX_SEGSIZE 65464
 
 int pick_port_bind(int sockfd, union sock_addr* myaddr, unsigned int from, unsigned int to);
-
 #endif

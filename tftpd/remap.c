@@ -371,7 +371,7 @@ char* rewrite_string(const char* input, const struct rule* rules, char mode, int
     /* Default error */
     *errmsg = "Remap table failure";
 
-    if (verbosity >= 3)
+    if (g_verbosity >= 3)
     {
         syslog(LOG_INFO, "remap: input: %s", current);
     }
@@ -411,7 +411,7 @@ char* rewrite_string(const char* input, const struct rule* rules, char mode, int
 
                 if (ruleptr->rule_flags & RULE_ABORT)
                 {
-                    if (verbosity >= 3)
+                    if (g_verbosity >= 3)
                     {
                         syslog(LOG_INFO, "remap: rule %d: abort: %s", ruleptr->nrule, current);
                     }
@@ -438,7 +438,7 @@ char* rewrite_string(const char* input, const struct rule* rules, char mode, int
                     genmatchstring(newstr, ruleptr->pattern, current, pmatch, macrosub);
                     free(current);
                     current = newstr;
-                    if (verbosity >= 3)
+                    if (g_verbosity >= 3)
                     {
                         syslog(LOG_INFO, "remap: rule %d: rewrite: %s", ruleptr->nrule, current);
                     }
@@ -457,7 +457,7 @@ char* rewrite_string(const char* input, const struct rule* rules, char mode, int
 
             if (ruleptr->rule_flags & RULE_EXIT)
             {
-                if (verbosity >= 3)
+                if (g_verbosity >= 3)
                 {
                     syslog(LOG_INFO, "remap: rule %d: exit", ruleptr->nrule);
                 }
@@ -466,7 +466,7 @@ char* rewrite_string(const char* input, const struct rule* rules, char mode, int
             else if (ruleptr->rule_flags & RULE_RESTART)
             {
                 ruleptr = rules; /* Start from the top */
-                if (verbosity >= 3)
+                if (g_verbosity >= 3)
                 {
                     syslog(LOG_INFO, "remap: rule %d: restart", ruleptr->nrule);
                 }
@@ -474,7 +474,7 @@ char* rewrite_string(const char* input, const struct rule* rules, char mode, int
         }
     }
 
-    if (verbosity >= 3)
+    if (g_verbosity >= 3)
     {
         syslog(LOG_INFO, "remap: done");
     }

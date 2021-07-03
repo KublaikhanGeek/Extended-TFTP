@@ -25,6 +25,9 @@ exec_prefix = @exec_prefix@
 # Directory for user binaries
 BINDIR  = @bindir@
 
+# Directory for lib 
+LIBDIR = @libdir@
+
 # Man page tree
 MANDIR  = @mandir@
 

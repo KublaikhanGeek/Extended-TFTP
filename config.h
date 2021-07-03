@@ -235,21 +235,22 @@ typedef int socklen_t;
 #ifdef HAVE_SYSEXITS_H
 #include <sysexits.h>
 #else
-#define EX_USAGE       64 /* command line usage error */
-#define EX_DATAERR     65 /* data format error */
-#define EX_NOINPUT     66 /* cannot open input */
-#define EX_NOUSER      67 /* addressee unknown */
-#define EX_NOHOST      68 /* host name unknown */
-#define EX_UNAVAILABLE 69 /* service unavailable */
-#define EX_SOFTWARE    70 /* internal software error */
-#define EX_OSERR       71 /* system error (e.g., can't fork) */
-#define EX_OSFILE      72 /* critical OS file missing */
-#define EX_CANTCREAT   73 /* can't create (user) output file */
-#define EX_IOERR       74 /* input/output error */
-#define EX_TEMPFAIL    75 /* temp failure; user is invited to retry */
-#define EX_PROTOCOL    76 /* remote error in protocol */
-#define EX_NOPERM      77 /* permission denied */
-#define EX_CONFIG      78 /* configuration error */
+#define EX_USAGE       64  /* command line usage error */
+#define EX_DATAERR     65  /* data format error */
+#define EX_NOINPUT     66  /* cannot open input */
+#define EX_NOUSER      67  /* addressee unknown */
+#define EX_NOHOST      68  /* host name unknown */
+#define EX_UNAVAILABLE 69  /* service unavailable */
+#define EX_SOFTWARE    70  /* internal software error */
+#define EX_OSERR       71  /* system error (e.g., can't fork) */
+#define EX_OSFILE      72  /* critical OS file missing */
+#define EX_CANTCREAT   73  /* can't create (user) output file */
+#define EX_IOERR       74  /* input/output error */
+#define EX_TEMPFAIL    75  /* temp failure; user is invited to retry */
+#define EX_PROTOCOL    76  /* remote error in protocol */
+#define EX_NOPERM      77  /* permission denied */
+#define EX_CONFIG      78  /* configuration error */
+#define EX_OK          200 /* OK */
 #endif
 
 /* If we don't have sigsetjmp() et all, setjmp() will have to do */
@@ -294,6 +295,49 @@ typedef int socklen_t;
 #ifndef EOPTNEG
 #define EOPTNEG 8
 #endif
+
+#define DELE   7
+#define CWD    8
+#define LIST   9
+#define NOOP   10
+#define MKD    11
+#define RMD    12
+#define PWD    13
+#define CDUP   14
+#define SIZE   15
+#define CHMOD  16
+#define RETURN 17
+
+#define TFTP_NOOPOK  200
+#define TFTP_LSOK    200
+#define TFTP_CHMODOK 200
+#define TFTP_SIZEOK  213
+#define TFTP_CWDOK   250
+#define TFTP_CDUPOK  250
+#define TFTP_RMDIROK 250
+#define TFTP_DELEOK  250
+#define TFTP_PWDOK   257
+#define TFTP_MKDIROK 257
+
+#define TFTP_BADCMD         500
+#define TFTP_BADOPTS        501
+#define TFTP_COMMANDNOTIMPL 502
+#define TFTP_NEEDUSER       503
+#define TFTP_NEEDRNFR       503
+#define TFTP_BADPBSZ        503
+#define TFTP_BADPROT        503
+#define TFTP_BADSTRU        504
+#define TFTP_BADMODE        504
+#define TFTP_BADAUTH        504
+#define TFTP_NOSUCHPROT     504
+#define TFTP_NEEDENCRYPT    522
+#define TFTP_EPSUBAD        522
+#define TFTP_DATATLSBAD     522
+#define TFTP_LOGINERR       530
+#define TFTP_NOHANDLEPROT   536
+#define TFTP_FILEFAIL       550
+#define TFTP_NOPERM         550
+#define TFTP_UPLOADFAIL     55
 
 /* Prototypes for libxtra functions */
 
