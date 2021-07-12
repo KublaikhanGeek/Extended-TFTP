@@ -40,13 +40,12 @@ void tftp_destroy(void* obj);
 
 // setting
 int tftp_set_server(void* obj, const char* serverip, int port);
-int tftp_set_mode(void* obj, const char* mode);   // set file transfer mode: "netascii", "octet"
-int tftp_set_verbose(void* obj, int onoff);       // toggle verbose mode
-int tftp_set_trace(void* obj, int onoff);         // toggle packet tracing
-int tftp_set_literal(void* obj, int onoff);       // toggle literal mode, ignore ':' in file name
-int tftp_set_rexmt(void* obj, int rexmt);         // set per-packet transmission timeout
-int tftp_set_timeout(void* obj, int timeout);     // set total retransmission timeout
-int tftp_set_blocksize(void* obj, int blocksize); // set block size
+int tftp_set_mode(void* obj, const char* mode); // set file transfer mode: "netascii", "octet"
+int tftp_set_verbose(void* obj, int onoff);     // toggle verbose mode
+int tftp_set_trace(void* obj, int onoff);       // toggle packet tracing
+int tftp_set_literal(void* obj, int onoff);     // toggle literal mode, ignore ':' in file name
+int tftp_set_rexmt(void* obj, int rexmt);       // set per-packet transmission timeout
+int tftp_set_timeout(void* obj, int timeout);   // set total retransmission timeout
 
 // cmd
 int tftp_cmd_get(void* obj, const char* local, const char* remote, int* remotesize, int* transfersize); // receive file

@@ -32,6 +32,7 @@
  */
 
 #include "common/tftpsubs.h"
+#include "common/ikcp.h"
 #include "tftp_client.h"
 
 /*
@@ -51,7 +52,7 @@ static const struct modes modes[]
 
 #define MODE_OCTET    (&modes[2])
 #define MODE_NETASCII (&modes[0])
-#define MODE_DEFAULT  MODE_NETASCII
+#define MODE_DEFAULT  MODE_OCTET
 
 #define CHECK_CONNECTED(a)                            \
     do                                                \
@@ -66,6 +67,7 @@ static const struct modes modes[]
 #define TIMEOUT   5 /* secs between rexmt's */
 #define PORT_FROM 61000
 #define PORT_TO   63000
+#define BLKSIZE   1350
 #define PKTSIZE   SEGSIZE + 4
 char ackbuf[PKTSIZE];
 char cmdbuf[PKTSIZE];
@@ -73,6 +75,7 @@ int g_timeout;
 int g_rexmtval;
 int g_maxtimeout;
 sigjmp_buf g_timeoutbuf;
+int firstReq = 1;
 
 struct tftpObj
 {
@@ -85,7 +88,10 @@ struct tftpObj
     int connected;
     int literal;
     struct modes* mode;
+    ikcpcb* kcpobj;
+    int newconnected;
     union sock_addr peeraddr;
+    union sock_addr newpeeraddr;
     union sock_addr localaddr;
 };
 
@@ -98,6 +104,10 @@ static void timer(int);
 static void tpacket(const char*, struct tftphdr*, int);
 static int send_cmd_reply(struct tftpObj* obj, char* send, int sendLen, char* reply, int* replyLen);
 static int exe_cmd(void* obj, u_short opcode, const char* cmd, int cmdSize, char* msg, int* msgSize);
+static int tftp_set_blocksize(void* obj, int blocksize);
+static ikcpcb* kcp_init(struct tftpObj* tftp);
+static int kcp_op(const char* buf, int len, ikcpcb* kcp, void* user);
+static void kcp_uninit(struct tftpObj* tftp);
 
 static int makerequest(int request, const char* name, struct tftphdr* tp, const char* mode, int blocksize, int tsize)
 {
@@ -194,7 +204,7 @@ static void nak(struct tftpObj* tftp, int error, const char* msg)
 
     if (tftp->trace)
         tpacket("sent", tp, length);
-    if (sendto(tftp->socket, ackbuf, length, 0, &tftp->peeraddr.sa, SOCKLEN(&tftp->peeraddr)) != length)
+    if (ikcp_send(tftp->kcpobj, ackbuf, length) < 0)
         perror("nak");
 }
 
@@ -305,11 +315,12 @@ void* tftp_create(const char* serverip, int port, const char* localip, int local
     obj->mode  = MODE_DEFAULT;
     obj->rexmt = g_rexmtval = TIMEOUT;
     obj->timeout = g_maxtimeout = 5 * TIMEOUT;
-    obj->blocksize              = 0;
+    obj->blocksize              = BLKSIZE;
     obj->trace                  = 0;
     obj->verbose                = 0;
     obj->connected              = 0;
     obj->literal                = 0;
+    obj->newconnected           = 0;
     obj->socket                 = socket(AF_INET, SOCK_DGRAM, 0);
     if (obj->socket < 0)
     {
@@ -319,6 +330,7 @@ void* tftp_create(const char* serverip, int port, const char* localip, int local
     }
 
     bzero(&(obj->peeraddr), sizeof(obj->peeraddr));
+    bzero(&(obj->newpeeraddr), sizeof(obj->newpeeraddr));
     bzero(&(obj->localaddr), sizeof(obj->localaddr));
 
     if (serverip != NULL)
@@ -327,6 +339,10 @@ void* tftp_create(const char* serverip, int port, const char* localip, int local
         obj->peeraddr.si.sin_family      = AF_INET;
         obj->peeraddr.si.sin_addr.s_addr = inet_addr(serverip);
         obj->peeraddr.si.sin_port        = htons(port);
+
+        obj->newpeeraddr.si.sin_family      = AF_INET;
+        obj->newpeeraddr.si.sin_addr.s_addr = inet_addr(serverip);
+        obj->newpeeraddr.si.sin_port        = htons(port);
     }
     else
     {
@@ -359,6 +375,8 @@ void* tftp_create(const char* serverip, int port, const char* localip, int local
         }
     }
 
+    obj->kcpobj = kcp_init(obj);
+
     return obj;
 }
 
@@ -366,6 +384,7 @@ void tftp_destroy(void* obj)
 {
     if (obj != NULL)
     {
+        kcp_uninit((struct tftpObj*)obj);
         free(obj);
     }
 }
@@ -384,6 +403,10 @@ int tftp_set_server(void* obj, const char* serverip, int port)
     tftp->peeraddr.si.sin_family      = AF_INET;
     tftp->peeraddr.si.sin_addr.s_addr = inet_addr(serverip);
     tftp->peeraddr.si.sin_port        = htons(port);
+
+    tftp->newpeeraddr.si.sin_family      = AF_INET;
+    tftp->newpeeraddr.si.sin_addr.s_addr = inet_addr(serverip);
+    tftp->newpeeraddr.si.sin_port        = htons(port);
 
     return 0;
 }
@@ -627,7 +650,6 @@ int tftp_cmd_put(void* obj, const char* local, const char* remote, int* localsiz
 {
     struct tftphdr* ap; /* data and ack packets */
     struct tftphdr* dp;
-    int n;
     volatile int is_request;
     volatile u_short block;
     volatile int size, convert;
@@ -640,6 +662,8 @@ int tftp_cmd_put(void* obj, const char* local, const char* remote, int* localsiz
     volatile int ret = 0;
     union sock_addr peeraddr;
     volatile int tsize = 0;
+    int recvLen        = 0;
+    int kcpRecv        = 0;
 
     if (!obj || !local || !remote || !localsize || !transfersize)
     {
@@ -647,13 +671,16 @@ int tftp_cmd_put(void* obj, const char* local, const char* remote, int* localsiz
     }
 
     startclock(); /* start stat's clock */
-    tftp       = (struct tftpObj*)obj;
-    dp         = r_init(); /* reset fillbuf/read-ahead code */
-    ap         = (struct tftphdr*)ackbuf;
-    convert    = !strcmp(tftp->mode->m_mode, "netascii");
-    block      = 0;
-    is_request = 1; /* First packet is the actual WRQ */
-    amount     = 0;
+    tftp               = (struct tftpObj*)obj;
+    dp                 = r_init(); /* reset fillbuf/read-ahead code */
+    ap                 = (struct tftphdr*)ackbuf;
+    convert            = !strcmp(tftp->mode->m_mode, "netascii");
+    block              = 0;
+    is_request         = 1; /* First packet is the actual WRQ */
+    amount             = 0;
+    firstReq           = 1;
+    tftp->newconnected = 0;
+    int sendFlag       = 0;
 
     CHECK_CONNECTED(tftp->connected);
     file = fopen(local, convert ? "rt" : "rb");
@@ -664,7 +691,6 @@ int tftp_cmd_put(void* obj, const char* local, const char* remote, int* localsiz
     }
     memcpy(&peeraddr, &tftp->peeraddr, sizeof(union sock_addr));
 
-    bsd_signal(SIGALRM, timer);
     do
     {
         if (is_request)
@@ -684,6 +710,12 @@ int tftp_cmd_put(void* obj, const char* local, const char* remote, int* localsiz
                 segsize = tftp->blocksize;
             }
             size = makerequest(WRQ, remote, dp, tftp->mode->m_mode, tftp->blocksize, tsize) - 4;
+            if (sendto(tftp->socket, dp, size, 0, &peeraddr.sa, SOCKLEN(&peeraddr)) != size)
+            {
+                perror("tftp: sendto");
+                ret = -1;
+                goto abort;
+            }
         }
         else
         {
@@ -696,42 +728,36 @@ int tftp_cmd_put(void* obj, const char* local, const char* remote, int* localsiz
             dp->th_opcode = htons((u_short)DATA);
             dp->th_block  = htons((u_short)block);
         }
-        g_timeout = 0;
-        (void)sigsetjmp(g_timeoutbuf, 1);
-        if (g_timeout >= g_maxtimeout)
-        {
-            ret = -1;
-            goto abort;
-        }
 
         if (tftp->trace)
             tpacket("sent", dp, size + 4);
-        n = sendto(tftp->socket, dp, size + 4, 0, &peeraddr.sa, SOCKLEN(&peeraddr));
-        if (n != size + 4)
+
+    update:
+        ikcp_update(tftp->kcpobj, iclock());
+        if (tftp->kcpobj->state == (IUINT32)-1)
         {
-            perror("tftp: sendto");
+            printf("network timeout \n");
             ret = -1;
             goto abort;
         }
-        read_ahead(file, convert);
-        for (;;)
+        fromlen = sizeof(from);
+        recvLen = recvfrom(tftp->socket, ackbuf, sizeof(ackbuf), MSG_DONTWAIT, &from.sa, &fromlen);
+        if (recvLen > 0)
         {
-            alarm(tftp->rexmt);
-            do
+            if (tftp->newconnected == 0)
             {
-                fromlen = sizeof(from);
-                n       = recvfrom(tftp->socket, ackbuf, sizeof(ackbuf), 0, &from.sa, &fromlen);
-            } while (n <= 0);
-            alarm(0);
-            if (n < 0)
-            {
-                perror("tftp: recvfrom");
-                ret = -1;
-                goto abort;
+                sa_set_port(&peeraddr, SOCKPORT(&from));          /* added */
+                sa_set_port(&tftp->newpeeraddr, SOCKPORT(&from)); /* added */
+                printf(">>>>>>>>>>new connected port: %d \n", ntohs(tftp->newpeeraddr.si.sin_port));
+                tftp->newconnected = 1;
             }
-            sa_set_port(&peeraddr, SOCKPORT(&from)); /* added */
+            ikcp_input(tftp->kcpobj, ackbuf, recvLen);
+        }
+        kcpRecv = ikcp_recv(tftp->kcpobj, ackbuf, sizeof(ackbuf));
+        if (kcpRecv > 0)
+        {
             if (tftp->trace)
-                tpacket("received", ap, n);
+                tpacket("received", ap, kcpRecv);
             /* should verify packet came from server */
             ap_opcode = ntohs((u_short)ap->th_opcode);
             ap_block  = ntohs((u_short)ap->th_block);
@@ -746,7 +772,7 @@ int tftp_cmd_put(void* obj, const char* local, const char* remote, int* localsiz
             {
                 int argn  = 0;
                 char* tmp = (char*)&(ap->th_stuff);
-                char* end = (char*)ap + n;
+                char* end = (char*)ap + kcpRecv;
                 char* val;
                 char* opt = tmp;
 
@@ -783,37 +809,48 @@ int tftp_cmd_put(void* obj, const char* local, const char* remote, int* localsiz
                     }
                 }
                 printf("blksize:%d, size:%d\n", segsize, tsize);
-                break;
-            }
-            if (ap_opcode == ACK)
-            {
-                int j;
-
-                if (ap_block == block)
-                {
-                    break;
-                }
-                /* On an error, try to synchronize
-                 * both sides.
-                 */
-                j = synchnet(tftp->socket);
-                if (j && tftp->trace)
-                {
-                    printf("discarded %d packets\n", j);
-                }
-                /*
-                 * RFC1129/RFC1350: We MUST NOT re-send the DATA
-                 * packet in response to an invalid ACK.  Doing so
-                 * would cause the Sorcerer's Apprentice bug.
-                 */
+                sendFlag = 1;
+                goto update;
             }
         }
+
+        if (sendFlag == 1 && (ikcp_waitsnd(tftp->kcpobj) < (tftp->kcpobj->snd_wnd)))
+        {
+            ret = ikcp_send(tftp->kcpobj, (char*)dp, size + 4);
+            if (ret < 0)
+            {
+                perror("tftp: sendto");
+                ret = -1;
+                goto abort;
+            }
+            read_ahead(file, convert);
+            usleep(2000);
+        }
+        else
+        {
+            usleep(10000);
+            goto update;
+        }
+
         if (!is_request)
             amount += size;
         is_request = 0;
         block++;
         *transfersize = amount;
     } while (size == segsize || block == 1);
+    ikcp_update(tftp->kcpobj, iclock());
+    ikcp_flush(tftp->kcpobj);
+    while (!iqueue_is_empty(&tftp->kcpobj->snd_buf) || !iqueue_is_empty(&tftp->kcpobj->rcv_buf))
+    {
+        ikcp_update(tftp->kcpobj, iclock());
+        recvLen = recvfrom(tftp->socket, ackbuf, sizeof(ackbuf), MSG_DONTWAIT, &from.sa, &fromlen);
+        if (recvLen > 0)
+        {
+            ikcp_input(tftp->kcpobj, ackbuf, recvLen);
+        }
+        usleep(20);
+    }
+    printf("[Put] over\n");
 abort:
     fclose(file);
     stopclock();
@@ -827,8 +864,6 @@ int tftp_cmd_get(void* obj, const char* local, const char* remote, int* remotesi
 {
     struct tftphdr* ap;
     struct tftphdr* dp;
-    int n;
-    volatile u_short block;
     volatile int size, firsttrip;
     volatile unsigned long amount;
     union sock_addr from;
@@ -840,6 +875,9 @@ int tftp_cmd_get(void* obj, const char* local, const char* remote, int* remotesi
     volatile int ret   = 0;
     volatile int tsize = 0;
     union sock_addr peeraddr;
+    int recvLen = 0;
+    int kcpRecv = 0;
+    firstReq    = 1;
 
     if (!obj || !local || !remote || !remotesize || !transfersize)
     {
@@ -847,13 +885,13 @@ int tftp_cmd_get(void* obj, const char* local, const char* remote, int* remotesi
     }
 
     startclock();
-    tftp      = (struct tftpObj*)obj;
-    dp        = w_init();
-    ap        = (struct tftphdr*)ackbuf;
-    convert   = !strcmp(tftp->mode->m_mode, "netascii");
-    block     = 1;
-    firsttrip = 1;
-    amount    = 0;
+    tftp               = (struct tftpObj*)obj;
+    dp                 = w_init();
+    ap                 = (struct tftphdr*)ackbuf;
+    convert            = !strcmp(tftp->mode->m_mode, "netascii");
+    firsttrip          = 1;
+    amount             = 0;
+    tftp->newconnected = 0;
 
     CHECK_CONNECTED(tftp->connected);
     file = fopen(local, convert ? "wt" : "wb");
@@ -863,8 +901,8 @@ int tftp_cmd_get(void* obj, const char* local, const char* remote, int* remotesi
         return -1;
     }
     memcpy(&peeraddr, &tftp->peeraddr, sizeof(union sock_addr));
+    printf("[GET] start\n");
 
-    bsd_signal(SIGALRM, timer);
     do
     {
         if (firsttrip)
@@ -873,55 +911,31 @@ int tftp_cmd_get(void* obj, const char* local, const char* remote, int* remotesi
             {
                 segsize = tftp->blocksize;
             }
-            size      = makerequest(RRQ, remote, ap, tftp->mode->m_mode, tftp->blocksize, 0);
-            firsttrip = 0;
-        }
-        else
-        {
-            ap->th_opcode = htons((u_short)ACK);
-            ap->th_block  = htons((u_short)block);
-            size          = 4;
-            block++;
-        }
-        g_timeout = 0;
-        (void)sigsetjmp(g_timeoutbuf, 1);
-        if (g_timeout >= g_maxtimeout)
-        {
-            fclose(file);
-            stopclock();
-            if (amount > 0 && tftp->verbose)
-                printstats("Received", amount);
-            return -1;
-        }
-    send_ack:
-        if (tftp->trace)
-            tpacket("sent", ap, size);
-        if (sendto(tftp->socket, ackbuf, size, 0, &peeraddr.sa, SOCKLEN(&peeraddr)) != size)
-        {
-            alarm(0);
-            perror("tftp: sendto");
-            ret = -1;
-            goto abort;
-        }
-        write_behind(file, convert);
-        for (;;)
-        {
-            alarm(tftp->rexmt);
-            do
+            size = makerequest(RRQ, remote, ap, tftp->mode->m_mode, tftp->blocksize, 0);
+            if (tftp->trace)
+                tpacket("send", ap, size);
+            if (sendto(tftp->socket, ackbuf, size, 0, &peeraddr.sa, SOCKLEN(&peeraddr)) != size)
             {
-                fromlen = sizeof(from);
-                n       = recvfrom(tftp->socket, dp, MAX_SEGSIZE + 4, 0, &from.sa, &fromlen);
-            } while (n <= 0);
-            alarm(0);
-            if (n < 0)
-            {
-                perror("tftp: recvfrom");
+                perror("tftp: sendto");
                 ret = -1;
                 goto abort;
             }
-            sa_set_port(&peeraddr, SOCKPORT(&from)); /* added */
+            firsttrip = 0;
+        }
+    recv:
+        // printf("[Get] ikcp_update\n");
+        ikcp_update(tftp->kcpobj, iclock());
+        if (tftp->kcpobj->state == (IUINT32)-1)
+        {
+            printf("network timeout \n");
+            ret = -1;
+            goto abort;
+        }
+        kcpRecv = ikcp_recv(tftp->kcpobj, (char*)dp, MAX_SEGSIZE + 4);
+        while (kcpRecv > 0)
+        {
             if (tftp->trace)
-                tpacket("received", dp, n);
+                tpacket("received", dp, kcpRecv);
             /* should verify client address */
             dp_opcode = ntohs((u_short)dp->th_opcode);
             dp_block  = ntohs((u_short)dp->th_block);
@@ -936,7 +950,7 @@ int tftp_cmd_get(void* obj, const char* local, const char* remote, int* remotesi
             {
                 int argn  = 0;
                 char* tmp = (char*)&(dp->th_stuff);
-                char* end = (char*)dp + n;
+                char* end = (char*)dp + kcpRecv;
                 char* val;
                 char* opt = tmp;
 
@@ -973,49 +987,67 @@ int tftp_cmd_get(void* obj, const char* local, const char* remote, int* remotesi
                     }
                 }
                 printf("blksize:%d, size:%d\n", segsize, tsize);
-
-                ap->th_opcode = htons((u_short)ACK);
-                ap->th_block  = htons(0);
-                size          = 4;
-                goto send_ack;
+                usleep(1000);
+                goto recv;
             }
 
             if (dp_opcode == DATA)
             {
-                int j;
-
-                if (dp_block == block)
+                // printf("received block:%d\n", dp_block);
+                write_behind(file, convert);
+                /*      size = write(fd, dp->th_data, n - 4); */
+                size = writeit(file, &dp, kcpRecv - 4, convert);
+                if (size < 0)
                 {
-                    break; /* have next packet */
+                    nak(tftp, errno + 100, NULL);
+                    break;
                 }
-                /* On an error, try to synchronize
-                 * both sides.
-                 */
-                j = synchnet(tftp->socket);
-                if (j && tftp->trace)
+                amount += size;
+                *transfersize = amount;
+                if (size != segsize)
                 {
-                    printf("discarded %d packets\n", j);
-                }
-                if (dp_block == (block - 1))
-                {
-                    goto send_ack; /* resend ack */
+                    goto end;
                 }
             }
+
+            kcpRecv = ikcp_recv(tftp->kcpobj, (char*)dp, MAX_SEGSIZE + 4);
         }
-        /*      size = write(fd, dp->th_data, n - 4); */
-        size = writeit(file, &dp, n - 4, convert);
-        if (size < 0)
+        fromlen = sizeof(from);
+        recvLen = recvfrom(tftp->socket, dp, MAX_SEGSIZE + 4, MSG_DONTWAIT, &from.sa, &fromlen);
+        if (recvLen > 0)
         {
-            nak(tftp, errno + 100, NULL);
-            break;
+            if (tftp->newconnected == 0)
+            {
+                sa_set_port(&peeraddr, SOCKPORT(&from));          /* added */
+                sa_set_port(&tftp->newpeeraddr, SOCKPORT(&from)); /* added */
+                printf(">>>>>>>>>>new connected port: %d \n", ntohs(tftp->newpeeraddr.si.sin_port));
+                tftp->newconnected = 1;
+            }
+            ikcp_input(tftp->kcpobj, dp, recvLen);
+            usleep(1000);
+            goto recv;
         }
-        amount += size;
-        *transfersize = amount;
+        else
+        {
+            usleep(1000);
+            goto recv;
+        }
     } while (size == segsize);
-abort:                                   /* ok to ack, since user */
-    ap->th_opcode = htons((u_short)ACK); /* has seen err msg */
-    ap->th_block  = htons((u_short)block);
-    (void)sendto(tftp->socket, ackbuf, 4, 0, (struct sockaddr*)&peeraddr, SOCKLEN(&peeraddr));
+end:
+    ikcp_update(tftp->kcpobj, iclock());
+    ikcp_flush(tftp->kcpobj);
+    while (!iqueue_is_empty(&tftp->kcpobj->snd_buf) || !iqueue_is_empty(&tftp->kcpobj->rcv_buf))
+    {
+        ikcp_update(tftp->kcpobj, iclock());
+        recvLen = recvfrom(tftp->socket, dp, MAX_SEGSIZE + 4, MSG_DONTWAIT, &from.sa, &fromlen);
+        if (recvLen > 0)
+        {
+            ikcp_input(tftp->kcpobj, (char*)dp, recvLen);
+        }
+        usleep(20);
+    }
+    printf("[Get] over\n");
+abort:                           /* ok to ack, since user */
     write_behind(file, convert); /* flush last buffer */
     fclose(file);
     stopclock();
@@ -1310,4 +1342,37 @@ int tftp_cmd_chmod(void* obj, const char* path, const char* mode)
     cp += strlen(mode);
     *cp++ = '\0';
     return exe_cmd(obj, CHMOD, cmd, cp - cmd, msg, &msgSize);
+}
+
+int kcp_op(const char* buf, int len, ikcpcb* kcp, void* user)
+{
+    struct tftpObj* ctx = (struct tftpObj*)user;
+    // printf("Send %d bytes\n",len);
+    if (ctx->newconnected != 1)
+    {
+        printf("return -1 Send %d bytes\n", len);
+        return -1;
+    }
+    char ip[256];
+    inet_ntop(AF_INET, (void*)&(ctx->newpeeraddr.si.sin_addr), ip, INET_ADDRSTRLEN);
+    int port = ntohs(ctx->newpeeraddr.si.sin_port);
+    printf("Send %d bytes to %s %d\n", len, ip, port);
+    return sendto(ctx->socket, buf, len, 0, &ctx->newpeeraddr.sa, SOCKLEN(&ctx->newpeeraddr));
+}
+
+ikcpcb* kcp_init(struct tftpObj* tftp)
+{
+    ikcpcb* kcpobj = ikcp_create(123, tftp);
+    ikcp_wndsize(kcpobj, 1024, 1024);
+    ikcp_nodelay(kcpobj, 1, 20, 2, 1);
+    ikcp_setoutput(kcpobj, kcp_op);
+    ikcp_update(kcpobj, iclock());
+
+    return kcpobj;
+}
+
+void kcp_uninit(struct tftpObj* tftp)
+{
+    ikcp_flush(tftp->kcpobj);
+    ikcp_release(tftp->kcpobj);
 }

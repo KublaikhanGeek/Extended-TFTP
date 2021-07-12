@@ -24,17 +24,17 @@ void* thread(void* arg)
 
 int main()
 {
-    void* obj = tftp_create("192.168.20.176", 69, "192.168.18.145", -1);
+    void* obj = tftp_create("192.168.20.11", 69, "192.168.18.145", -1);
     if (obj)
     {
         tftp_set_verbose(obj, 1);
         tftp_set_trace(obj, 1);
-#if 0
-        tftp_set_blocksize(obj, 2048);
-        tftp_set_mode(obj, "octet");
-        tftp_cmd_put(obj, "test.txt", "test.txt", &filesize, &transfersize);
+#if 1
+        //    tftp_set_blocksize(obj, 2048);
+        //   tftp_set_mode(obj, "octet");
+        tftp_cmd_put(obj, "versions.zip", "hello.txt", &filesize, &transfersize);
 
-        tftp_cmd_get(obj, "test.txt", "test.txt", &filesize, &transfersize);
+        //    tftp_cmd_get(obj, "versions.zip", "server.cap", &filesize, &transfersize);
 #endif
 
 #if 0
@@ -45,7 +45,7 @@ int main()
         tftp_cmd_get(obj, "test.txt", "test.txt", &filesize, &transfersize);
 #endif
 
-#if 1
+#if 0
         char path[4096];
         int size;
 
@@ -123,6 +123,7 @@ int main()
 
         printf("------------------\n");
 #endif
+#if 0
         pthread_t th;
         int ret;
         ret = pthread_create(&th, NULL, thread, NULL);
@@ -132,6 +133,7 @@ int main()
         }
 
         pthread_join(th, NULL);
+#endif
     }
 
     return 0;

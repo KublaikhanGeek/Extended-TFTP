@@ -52,6 +52,7 @@
 #include <dirent.h>
 
 #include "common/tftpsubs.h"
+#include "common/ikcp.h"
 #include "recvfrom.h"
 #include "remap.h"
 
@@ -84,6 +85,18 @@ enum
     MESSAGE_TYPE_RETURN,
 };
 
+enum
+{
+    PROTOCOL_UDP,
+    PROTOCOL_KCP,
+};
+
+struct kcp_context
+{
+    union sock_addr peeraddr;
+    int socket;
+};
+
 const char* g_tftpd_progname;
 static int g_peer;
 static unsigned long g_timeout    = TIMEOUT; /* Current timeout value */
@@ -114,6 +127,7 @@ int g_unixperms     = 0;
 int g_portrange     = 0;
 unsigned int portrange_from, portrange_to;
 int g_verbosity = 0;
+ikcpcb* kcpobj;
 
 struct formats;
 #ifdef WITH_REGEX
@@ -124,7 +138,7 @@ static int tftp_handle(struct tftphdr*, int);
 static int tftp_file(struct tftphdr* tp, int size);
 static int tftp_list(struct tftphdr* tp, int size);
 static int tftp_cmd(struct tftphdr* tp, int size);
-static void nak(int, int, const char*);
+static void nak(int, int, int, const char*);
 static void timer(int);
 static void do_opt(const char*, const char*, char**);
 static int get_list(char*);
@@ -135,6 +149,9 @@ static int set_tsize(uintmax_t*);
 static int set_timeout(uintmax_t*);
 static int set_utimeout(uintmax_t*);
 static int set_rollover(uintmax_t*);
+static ikcpcb* kcp_init(struct kcp_context* ctx);
+static void kcp_uninit(ikcpcb* kcpobj);
+static int kcp_op(const char* buf, int len, ikcpcb* kcp, void* user);
 
 struct options
 {
@@ -1138,10 +1155,17 @@ int main(int argc, char** argv)
     /* Disable path MTU discovery */
     pmtu_discovery_off(g_peer);
 
+    struct kcp_context ctx;
+    memcpy(&ctx.peeraddr, &from, sizeof(union sock_addr));
+    ctx.socket = g_peer;
+
+    kcpobj    = kcp_init(&ctx);
     tp        = (struct tftphdr*)g_buf;
     tp_opcode = ntohs(tp->th_opcode);
     if (tp_opcode == RRQ || tp_opcode == WRQ)
         tftp_handle(tp, n);
+
+    kcp_uninit(kcpobj);
     exit(0);
 }
 
@@ -1209,7 +1233,7 @@ static int get_list(char* listbuf)
     DIR* dir = opendir(".");
     if (dir == NULL)
     {
-        nak(MESSAGE_TYPE_ERROR, errno, strerror(errno));
+        nak(PROTOCOL_UDP, MESSAGE_TYPE_ERROR, errno, strerror(errno));
         return -1;
     }
 
@@ -1287,7 +1311,7 @@ int tftp_list(struct tftphdr* tp, int size)
     remain = get_list(buf);
     if (remain <= 0)
     {
-        nak(MESSAGE_TYPE_ERROR, ECOMM, "Could not get directory list");
+        nak(PROTOCOL_UDP, MESSAGE_TYPE_ERROR, ECOMM, "Could not get directory list");
         return -1;
     }
 
@@ -1396,11 +1420,11 @@ int tftp_cmd(struct tftphdr* tp, int size)
 
             if (retCode == -1)
             {
-                nak(MESSAGE_TYPE_RETURN, TFTP_FILEFAIL, strerror(errno));
+                nak(PROTOCOL_UDP, MESSAGE_TYPE_RETURN, TFTP_FILEFAIL, strerror(errno));
             }
             else if (retCode == 0)
             {
-                nak(MESSAGE_TYPE_RETURN, TFTP_DELEOK, "Delete operation successful");
+                nak(PROTOCOL_UDP, MESSAGE_TYPE_RETURN, TFTP_DELEOK, "Delete operation successful");
             }
         }
         break;
@@ -1412,12 +1436,12 @@ int tftp_cmd(struct tftphdr* tp, int size)
         if (chdir(stuff) < 0)
         {
             retCode = -1;
-            nak(MESSAGE_TYPE_RETURN, TFTP_NOPERM, strerror(errno));
+            nak(PROTOCOL_UDP, MESSAGE_TYPE_RETURN, TFTP_NOPERM, strerror(errno));
         }
         else
         {
             retCode = 0;
-            nak(MESSAGE_TYPE_RETURN, TFTP_CWDOK, "Directory successfully changed.");
+            nak(PROTOCOL_UDP, MESSAGE_TYPE_RETURN, TFTP_CWDOK, "Directory successfully changed.");
         }
         break;
 
@@ -1432,7 +1456,7 @@ int tftp_cmd(struct tftphdr* tp, int size)
         if (mkdir(stuff, 0777) < 0)
         {
             retCode = -1;
-            nak(MESSAGE_TYPE_RETURN, TFTP_FILEFAIL, strerror(errno));
+            nak(PROTOCOL_UDP, MESSAGE_TYPE_RETURN, TFTP_FILEFAIL, strerror(errno));
         }
         else
         {
@@ -1457,7 +1481,7 @@ int tftp_cmd(struct tftphdr* tp, int size)
                     sprintf(path, "\"%s/%s\" created", dir, stuff);
                 }
             }
-            nak(MESSAGE_TYPE_RETURN, TFTP_MKDIROK, path);
+            nak(PROTOCOL_UDP, MESSAGE_TYPE_RETURN, TFTP_MKDIROK, path);
         }
         break;
     case RMD:
@@ -1466,12 +1490,12 @@ int tftp_cmd(struct tftphdr* tp, int size)
         if (rmdir(stuff) < 0)
         {
             retCode = -1;
-            nak(MESSAGE_TYPE_RETURN, TFTP_FILEFAIL, strerror(errno));
+            nak(PROTOCOL_UDP, MESSAGE_TYPE_RETURN, TFTP_FILEFAIL, strerror(errno));
         }
         else
         {
             retCode = 0;
-            nak(MESSAGE_TYPE_RETURN, TFTP_RMDIROK, "Remove directory operation successful.");
+            nak(PROTOCOL_UDP, MESSAGE_TYPE_RETURN, TFTP_RMDIROK, "Remove directory operation successful.");
         }
         break;
     case PWD:
@@ -1482,12 +1506,12 @@ int tftp_cmd(struct tftphdr* tp, int size)
             if (getcwd(path, sizeof path) == (char*)NULL)
             {
                 retCode = -1;
-                nak(MESSAGE_TYPE_RETURN, TFTP_FILEFAIL, strerror(errno));
+                nak(PROTOCOL_UDP, MESSAGE_TYPE_RETURN, TFTP_FILEFAIL, strerror(errno));
             }
             else
             {
                 retCode = 0;
-                nak(MESSAGE_TYPE_RETURN, TFTP_PWDOK, path);
+                nak(PROTOCOL_UDP, MESSAGE_TYPE_RETURN, TFTP_PWDOK, path);
             }
         }
         break;
@@ -1498,12 +1522,12 @@ int tftp_cmd(struct tftphdr* tp, int size)
         if (chdir("..") < 0)
         {
             retCode = -1;
-            nak(MESSAGE_TYPE_RETURN, TFTP_NOPERM, strerror(errno));
+            nak(PROTOCOL_UDP, MESSAGE_TYPE_RETURN, TFTP_NOPERM, strerror(errno));
         }
         else
         {
             retCode = 0;
-            nak(MESSAGE_TYPE_RETURN, TFTP_CWDOK, "Directory successfully changed.");
+            nak(PROTOCOL_UDP, MESSAGE_TYPE_RETURN, TFTP_CWDOK, "Directory successfully changed.");
         }
         break;
     case SIZE:
@@ -1514,7 +1538,7 @@ int tftp_cmd(struct tftphdr* tp, int size)
             if (stat(stuff, &stbuf) < 0)
             {
                 retCode = -1;
-                nak(MESSAGE_TYPE_RETURN, TFTP_NOPERM, strerror(errno));
+                nak(PROTOCOL_UDP, MESSAGE_TYPE_RETURN, TFTP_NOPERM, strerror(errno));
             }
             else
             {
@@ -1524,13 +1548,13 @@ int tftp_cmd(struct tftphdr* tp, int size)
                 {
                     retCode = -1;
                     sprintf(data, "%s is not a plain file.", stuff);
-                    nak(MESSAGE_TYPE_RETURN, TFTP_NOPERM, data);
+                    nak(PROTOCOL_UDP, MESSAGE_TYPE_RETURN, TFTP_NOPERM, data);
                 }
                 else
                 {
                     retCode = 0;
                     sprintf(data, "%ld", stbuf.st_size);
-                    nak(MESSAGE_TYPE_RETURN, TFTP_SIZEOK, data);
+                    nak(PROTOCOL_UDP, MESSAGE_TYPE_RETURN, TFTP_SIZEOK, data);
                 }
             }
         }
@@ -1552,12 +1576,12 @@ int tftp_cmd(struct tftphdr* tp, int size)
             if (chmod(path, modeVal) < 0)
             {
                 retCode = -1;
-                nak(MESSAGE_TYPE_RETURN, TFTP_NOPERM, strerror(errno));
+                nak(PROTOCOL_UDP, MESSAGE_TYPE_RETURN, TFTP_NOPERM, strerror(errno));
             }
             else
             {
                 retCode = 0;
-                nak(MESSAGE_TYPE_RETURN, TFTP_CHMODOK, "Permissions successfully changed.");
+                nak(PROTOCOL_UDP, MESSAGE_TYPE_RETURN, TFTP_CHMODOK, "Permissions successfully changed.");
             }
         }
         break;
@@ -1598,7 +1622,8 @@ int tftp_file(struct tftphdr* tp, int size)
 
         if (*cp)
         {
-            nak(MESSAGE_TYPE_ERROR, EBADOP, "Request not null-terminated");
+            nak(PROTOCOL_KCP, MESSAGE_TYPE_ERROR, EBADOP, "Request not null-terminated");
+            ikcp_release(kcpobj);
             exit(0);
         }
 
@@ -1618,12 +1643,14 @@ int tftp_file(struct tftphdr* tp, int size)
             }
             if (!pf->f_mode)
             {
-                nak(MESSAGE_TYPE_ERROR, EBADOP, "Unknown mode");
+                nak(PROTOCOL_KCP, MESSAGE_TYPE_ERROR, EBADOP, "Unknown mode");
+                ikcp_release(kcpobj);
                 exit(0);
             }
             if (!(filename = (*pf->f_rewrite)(origfilename, tp_opcode, from.sa.sa_family, &errmsgptr)))
             {
-                nak(MESSAGE_TYPE_ERROR, EACCESS, errmsgptr); /* File denied by mapping rule */
+                nak(PROTOCOL_KCP, MESSAGE_TYPE_ERROR, EACCESS, errmsgptr); /* File denied by mapping rule */
+                ikcp_release(kcpobj);
                 exit(0);
             }
             if (g_verbosity >= 1)
@@ -1634,6 +1661,7 @@ int tftp_file(struct tftphdr* tp, int size)
                     tmp_p = tmpbuf;
                     strcpy(tmpbuf, "???");
                 }
+                printf("%s from %s filename %s\n", tp_opcode == WRQ ? "WRQ" : "RRQ", tmp_p, filename);
                 if (filename == origfilename || !strcmp(filename, origfilename))
                     syslog(LOG_NOTICE, "%s from %s filename %s\n", tp_opcode == WRQ ? "WRQ" : "RRQ", tmp_p, filename);
                 else
@@ -1643,7 +1671,8 @@ int tftp_file(struct tftphdr* tp, int size)
             ecode = (*pf->f_validate)(filename, tp_opcode, pf, &errmsgptr);
             if (ecode)
             {
-                nak(MESSAGE_TYPE_ERROR, ecode, errmsgptr);
+                nak(PROTOCOL_KCP, MESSAGE_TYPE_ERROR, ecode, errmsgptr);
+                ikcp_release(kcpobj);
                 exit(0);
             }
             opt = ++cp;
@@ -1661,7 +1690,8 @@ int tftp_file(struct tftphdr* tp, int size)
 
     if (!pf)
     {
-        nak(MESSAGE_TYPE_ERROR, EBADOP, "Missing mode");
+        nak(PROTOCOL_KCP, MESSAGE_TYPE_ERROR, EBADOP, "Missing mode");
+        ikcp_release(kcpobj);
         exit(0);
     }
 
@@ -1840,7 +1870,8 @@ static void do_opt(const char* opt, const char* val, char** ap)
 
                 if (p + optlen + retlen + 2 >= ackbuf + sizeof(ackbuf))
                 {
-                    nak(MESSAGE_TYPE_ERROR, EOPTNEG, "Insufficient space for options");
+                    nak(PROTOCOL_KCP, MESSAGE_TYPE_ERROR, EOPTNEG, "Insufficient space for options");
+                    ikcp_release(kcpobj);
                     exit(0);
                 }
 
@@ -1851,7 +1882,8 @@ static void do_opt(const char* opt, const char* val, char** ap)
             }
             else
             {
-                nak(MESSAGE_TYPE_ERROR, EOPTNEG, "Unsupported option(s) requested");
+                nak(PROTOCOL_KCP, MESSAGE_TYPE_ERROR, EOPTNEG, "Unsupported option(s) requested");
+                ikcp_release(kcpobj);
                 exit(0);
             }
             break;
@@ -2085,77 +2117,51 @@ static void tftp_sendfile(const struct formats* pf, struct tftphdr* oap, int oac
     struct tftphdr* ap;       /* ack packet */
     static u_short block = 1; /* Static to avoid longjmp funnies */
     u_short ap_opcode, ap_block;
-    unsigned long r_timeout;
-    int size, n;
+    int size;
+    int recvLen = 0;
+    int kcpRecv = 0;
+    socklen_t fromlen;
 
     if (oap)
     {
-        g_timeout = g_rexmtval;
-        (void)sigsetjmp(g_timeoutbuf, 1);
-    oack:
-        r_timeout = g_timeout;
-        if (send(g_peer, oap, oacklen, 0) != oacklen)
+        if (ikcp_send(kcpobj, (char*)oap, oacklen) < 0)
         {
             syslog(LOG_WARNING, "tftpd: oack: %m\n");
             goto abort;
         }
-        for (;;)
-        {
-            n = recv_time(g_peer, ackbuf, sizeof(ackbuf), 0, &r_timeout);
-            if (n < 0)
-            {
-                syslog(LOG_WARNING, "tftpd: read: %m\n");
-                goto abort;
-            }
-            ap        = (struct tftphdr*)ackbuf;
-            ap_opcode = ntohs((u_short)ap->th_opcode);
-            ap_block  = ntohs((u_short)ap->th_block);
-
-            if (ap_opcode == ERROR)
-            {
-                syslog(LOG_WARNING, "tftp: client does not accept options\n");
-                goto abort;
-            }
-            if (ap_opcode == ACK)
-            {
-                if (ap_block == 0)
-                    break;
-                /* Resynchronize with the other side */
-                (void)synchnet(g_peer);
-                goto oack;
-            }
-        }
+        ikcp_update(kcpobj, iclock());
     }
 
+    // printf("tftpd: sendfile\n");
     dp = r_init();
     do
     {
         size = readit(file, &dp, pf->f_convert);
         if (size < 0)
         {
-            nak(MESSAGE_TYPE_ERROR, errno + 100, NULL);
+            nak(PROTOCOL_KCP, MESSAGE_TYPE_ERROR, errno + 100, NULL);
             goto abort;
         }
         dp->th_opcode = htons((u_short)DATA);
         dp->th_block  = htons((u_short)block);
-        g_timeout     = g_rexmtval;
-        (void)sigsetjmp(g_timeoutbuf, 1);
 
-        r_timeout = g_timeout;
-        if (send(g_peer, dp, size + 4, 0) != size + 4)
+    update:
+        ikcp_update(kcpobj, iclock());
+        if (kcpobj->state == (IUINT32)-1)
         {
-            syslog(LOG_WARNING, "tftpd: write: %m");
+            syslog(LOG_ERR, "network timeout \n");
+            printf("network timeout \n");
             goto abort;
         }
-        read_ahead(file, pf->f_convert);
-        for (;;)
+
+        recvLen = recvfrom(g_peer, ackbuf, sizeof(ackbuf), MSG_DONTWAIT, &from.sa, &fromlen);
+        if (recvLen > 0)
         {
-            n = recv_time(g_peer, ackbuf, sizeof(ackbuf), 0, &r_timeout);
-            if (n < 0)
-            {
-                syslog(LOG_WARNING, "tftpd: read(ack): %m");
-                goto abort;
-            }
+            ikcp_input(kcpobj, ackbuf, recvLen);
+        }
+        kcpRecv = ikcp_recv(kcpobj, ackbuf, sizeof(ackbuf));
+        if (kcpRecv > 0)
+        {
             ap        = (struct tftphdr*)ackbuf;
             ap_opcode = ntohs((u_short)ap->th_opcode);
             ap_block  = ntohs((u_short)ap->th_block);
@@ -2165,22 +2171,43 @@ static void tftp_sendfile(const struct formats* pf, struct tftphdr* oap, int oac
 
             if (ap_opcode == ACK)
             {
-                if (ap_block == block)
-                {
-                    break;
-                }
-                /* Re-synchronize with the other side */
-                (void)synchnet(g_peer);
-                /*
-                 * RFC1129/RFC1350: We MUST NOT re-send the DATA
-                 * packet in response to an invalid ACK.  Doing so
-                 * would cause the Sorcerer's Apprentice bug.
-                 */
+                printf("recv ock \n");
             }
         }
+
+        if (ikcp_waitsnd(kcpobj) < kcpobj->snd_wnd)
+        {
+            if (ikcp_send(kcpobj, (char*)dp, size + 4) < 0)
+            {
+                syslog(LOG_WARNING, "tftpd: write: %m");
+                goto abort;
+            }
+            printf("[%d] send file block:%d and size: %d\n", ikcp_waitsnd(kcpobj), block, size);
+            read_ahead(file, pf->f_convert);
+            usleep(2000);
+        }
+        else
+        {
+            usleep(10000);
+            goto update;
+        }
+
         if (!++block)
             block = g_rollover_val;
     } while (size == segsize);
+    ikcp_update(kcpobj, iclock());
+    ikcp_flush(kcpobj);
+    while (!iqueue_is_empty(&kcpobj->snd_buf) || !iqueue_is_empty(&kcpobj->rcv_buf))
+    {
+        ikcp_update(kcpobj, iclock());
+        recvLen = recvfrom(g_peer, ackbuf, sizeof(ackbuf), MSG_DONTWAIT, &from.sa, &fromlen);
+        if (recvLen > 0)
+        {
+            ikcp_input(kcpobj, ackbuf, recvLen);
+        }
+        usleep(20);
+    }
+    printf("[send] over\n");
 abort:
     (void)fclose(file);
 }
@@ -2191,98 +2218,101 @@ abort:
 static void tftp_recvfile(const struct formats* pf, struct tftphdr* oap, int oacklen)
 {
     struct tftphdr* dp;
-    int n, size;
+    int size;
     /* These are "static" to avoid longjmp funnies */
-    static struct tftphdr* ap; /* ack buffer */
     static u_short block = 0;
     static int acksize;
     u_short dp_opcode, dp_block;
-    unsigned long r_timeout;
+    int recvLen = 0;
+    int kcpRecv = 0;
+    socklen_t fromlen;
 
-    dp = w_init();
-    do
+    if (!block && oap)
     {
-        g_timeout = g_rexmtval;
-
-        if (!block && oap)
-        {
-            ap      = (struct tftphdr*)ackbuf;
-            acksize = oacklen;
-        }
-        else
-        {
-            ap            = (struct tftphdr*)ackbuf;
-            ap->th_opcode = htons((u_short)ACK);
-            ap->th_block  = htons((u_short)block);
-            acksize       = 4;
-            /* If we're sending a regular ACK, that means we have successfully
-             * sent the OACK. Clear oap so that we won't try to send another
-             * OACK when the block number wraps back to 0. */
-            oap = NULL;
-        }
-        if (!++block)
-            block = g_rollover_val;
-        (void)sigsetjmp(g_timeoutbuf, 1);
-    send_ack:
-        r_timeout = g_timeout;
-        if (send(g_peer, ackbuf, acksize, 0) != acksize)
+        acksize = oacklen;
+        if (ikcp_send(kcpobj, (char*)oap, oacklen) < 0)
         {
             syslog(LOG_WARNING, "tftpd: write(ack): %m");
             goto abort;
         }
-        write_behind(file, pf->f_convert);
-        for (;;)
+        ikcp_update(kcpobj, iclock());
+    }
+
+    dp = w_init();
+    do
+    {
+    recv:
+        ikcp_update(kcpobj, iclock());
+        if (kcpobj->state == (IUINT32)-1)
         {
-            n = recv_time(g_peer, dp, PKTSIZE, 0, &r_timeout);
-            if (n < 0)
-            { /* really? */
-                syslog(LOG_WARNING, "tftpd: read: %m");
-                goto abort;
-            }
+            syslog(LOG_ERR, "network timeout \n");
+            printf("network timeout \n");
+            goto abort;
+        }
+        kcpRecv = ikcp_recv(kcpobj, (char*)dp, MAX_SEGSIZE + 4);
+        while (kcpRecv > 0)
+        {
             dp_opcode = ntohs((u_short)dp->th_opcode);
             dp_block  = ntohs((u_short)dp->th_block);
             if (dp_opcode == ERROR)
                 goto abort;
             if (dp_opcode == DATA)
             {
-                if (dp_block == block)
-                {
-                    break; /* normal */
+                if (!++block)
+                    block = g_rollover_val;
+                printf("received block：%d and write block:%d\n", dp_block, block);
+                write_behind(file, pf->f_convert);
+                /*  size = write(file, dp->th_data, n - 4); */
+                size = writeit(file, &dp, kcpRecv - 4, pf->f_convert);
+                if (size != (kcpRecv - 4))
+                { /* ahem */
+                    if (size < 0)
+                        nak(PROTOCOL_KCP, MESSAGE_TYPE_ERROR, errno + 100, NULL);
+                    else
+                        nak(PROTOCOL_KCP, MESSAGE_TYPE_ERROR, ENOSPACE, NULL);
+                    goto abort;
                 }
-                /* Re-synchronize with the other side */
-                (void)synchnet(g_peer);
-                if (dp_block == (block - 1))
-                    goto send_ack; /* rexmit */
+
+                if (size != segsize)
+                {
+                    goto end;
+                }
             }
+
+            kcpRecv = ikcp_recv(kcpobj, (char*)dp, MAX_SEGSIZE + 4);
         }
-        /*  size = write(file, dp->th_data, n - 4); */
-        size = writeit(file, &dp, n - 4, pf->f_convert);
-        if (size != (n - 4))
-        { /* ahem */
-            if (size < 0)
-                nak(MESSAGE_TYPE_ERROR, errno + 100, NULL);
-            else
-                nak(MESSAGE_TYPE_ERROR, ENOSPACE, NULL);
-            goto abort;
+
+        fromlen = sizeof(from);
+        recvLen = recvfrom(g_peer, dp, MAX_SEGSIZE + 4, MSG_DONTWAIT, &from.sa, &fromlen);
+        if (recvLen > 0)
+        {
+            ikcp_input(kcpobj, dp, recvLen);
+            usleep(1000);
+            goto recv;
         }
+        else
+        {
+            usleep(1000);
+            goto recv;
+        }
+
     } while (size == segsize);
+end:
+    ikcp_update(kcpobj, iclock());
+    ikcp_flush(kcpobj);
+    while (!iqueue_is_empty(&kcpobj->snd_buf) || !iqueue_is_empty(&kcpobj->rcv_buf))
+    {
+        ikcp_update(kcpobj, iclock());
+        recvLen = recvfrom(g_peer, dp, MAX_SEGSIZE + 4, MSG_DONTWAIT, &from.sa, &fromlen);
+        if (recvLen > 0)
+        {
+            ikcp_input(kcpobj, (char*)dp, recvLen);
+        }
+        usleep(20);
+    }
+    printf("[recv] over\n");
     write_behind(file, pf->f_convert);
     (void)fclose(file); /* close data file */
-
-    ap->th_opcode = htons((u_short)ACK); /* send the "final" ack */
-    ap->th_block  = htons((u_short)(block));
-    (void)send(g_peer, ackbuf, 4, 0);
-
-    g_timeout_quit = 1;                                                      /* just quit on timeout */
-    n              = recv_time(g_peer, g_buf, sizeof(g_buf), 0, &g_timeout); /* normally times out and quits */
-    g_timeout_quit = 0;
-
-    if (n >= 4 &&            /* if read some data */
-        dp_opcode == DATA && /* and got a data block */
-        block == dp_block)
-    {                                     /* then my last ack was lost */
-        (void)send(g_peer, ackbuf, 4, 0); /* resend final ack */
-    }
 abort:
     return;
 }
@@ -2307,7 +2337,7 @@ static const char* const errmsgs[] = {
  * standard TFTP codes, or a UNIX errno
  * offset by 100.
  */
-static void nak(int type, int error, const char* msg)
+static void nak(int kcp, int type, int error, const char* msg)
 {
     struct tftphdr* tp;
     int length;
@@ -2354,6 +2384,39 @@ static void nak(int type, int error, const char* msg)
         syslog(LOG_INFO, "sending NAK (%d, %s) to %s", error, tp->th_msg, tmp_p);
     }
 
-    if (send(g_peer, g_buf, length, 0) != length)
-        syslog(LOG_WARNING, "nak: %m");
+    if (kcp)
+    {
+        if (ikcp_send(kcpobj, g_buf, length) < 0)
+            syslog(LOG_WARNING, "nak: %m");
+        ikcp_update(kcpobj, iclock);
+    }
+    else
+    {
+        if (send(g_peer, g_buf, length, 0) != length)
+            syslog(LOG_WARNING, "nak: %m");
+    }
+}
+
+ikcpcb* kcp_init(struct kcp_context* ctx)
+{
+    kcpobj = ikcp_create(123, ctx);
+    ikcp_wndsize(kcpobj, 1024, 1024);
+    ikcp_nodelay(kcpobj, 1, 20, 2, 1);
+    ikcp_setoutput(kcpobj, kcp_op);
+    ikcp_update(kcpobj, iclock());
+
+    return kcpobj;
+}
+
+void kcp_uninit(ikcpcb* obj)
+{
+    ikcp_flush(obj);
+    ikcp_release(obj);
+}
+
+int kcp_op(const char* buf, int len, ikcpcb* kcp, void* user)
+{
+    struct kcp_context* ctx = (struct kcp_context*)user;
+    printf("Send %d bytes\n", len);
+    return sendto(ctx->socket, buf, len, 0, &ctx->peeraddr.sa, SOCKLEN(&ctx->peeraddr));
 }
